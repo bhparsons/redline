@@ -1,0 +1,193 @@
+/* popup.css — the status dashboard, styled with the overlay's liquid-glass
+   tokens (design/liquid-glass/glass.css). Token names and values mirror that
+   sheet so the popup reads as the same material; the subset is inlined here
+   because the popup is a standalone extension page that never loads glass.css.
+   Light is the default set; @media (prefers-color-scheme: dark) overrides. */
+
+:root {
+  --rv-accent: #ffb02e;
+  --rv-green: #3fb27f;
+  --rv-red: #e05d5d;
+  --rv-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  --rv-glass-fill: rgba(255, 255, 255, 0.78);
+  --rv-glass-fill-strong: rgba(255, 255, 255, 0.86);
+  --rv-glass-fill-inset: rgba(255, 255, 255, 0.55);
+  --rv-glass-border: rgba(29, 34, 48, 0.14);
+  --rv-glass-border-soft: rgba(29, 34, 48, 0.10);
+  --rv-glass-shadow:
+    0 1px 2px rgba(30, 34, 56, 0.06),
+    0 8px 24px rgba(30, 34, 56, 0.12);
+  --rv-glass-ink: #1d2230;
+  --rv-glass-ink-soft: rgba(29, 34, 48, 0.66);
+  --rv-glass-tint: var(--rv-accent);
+  --rv-glass-tint-ink: #22180a;
+  --rv-glass-st-green: #177a4c;
+  --rv-glass-st-red: #b73535;
+  --rv-glass-st-amber: #8f6414;
+
+  --rv-page: #f2f0ec;
+
+  --rv-radius-xl: 16px;
+  --rv-radius-lg: 10px;
+  --rv-radius-sm: 6px;
+  --rv-radius-pill: 999px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --rv-glass-fill: rgba(28, 35, 51, 0.86);
+    --rv-glass-fill-strong: rgba(32, 39, 57, 0.92);
+    --rv-glass-fill-inset: rgba(255, 255, 255, 0.07);
+    --rv-glass-border: rgba(255, 255, 255, 0.16);
+    --rv-glass-border-soft: rgba(255, 255, 255, 0.10);
+    --rv-glass-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.30),
+      0 8px 24px rgba(0, 0, 0, 0.40);
+    --rv-glass-ink: #e8ecf5;
+    --rv-glass-ink-soft: rgba(232, 236, 245, 0.68);
+    --rv-glass-st-green: #3fb27f;
+    --rv-glass-st-red: #e05d5d;
+    --rv-glass-st-amber: #e0a84d;
+    --rv-page: #16181d;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  width: 320px;
+  background: var(--rv-page);
+  color: var(--rv-glass-ink);
+  font: 13px/1.5 var(--rv-font);
+}
+
+.rv-popup { padding: 14px 16px; }
+
+h1 { font-size: 14px; font-weight: 600; margin: 0 0 12px; letter-spacing: -0.01em; }
+/* build tag — which unpacked copy this popup belongs to */
+h1 .build {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px; font-weight: 400;
+  color: var(--rv-glass-ink-soft);
+  margin-left: 6px;
+}
+
+/* Functional glass layer — the status panel. */
+.panel {
+  background: var(--rv-glass-fill-strong);
+  border: 1px solid var(--rv-glass-border);
+  border-radius: var(--rv-radius-lg);
+  box-shadow: var(--rv-glass-shadow);
+  padding: 4px 12px;
+  margin-bottom: 12px;
+}
+
+.row {
+  display: flex;
+  /* CENTER, not baseline. The runner row's value wraps to two or three lines
+     (worktree · port · version), and baseline pinned the label and dot to the
+     FIRST line, leaving them floating at the top of a tall row. */
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--rv-glass-border-soft);
+}
+.row:last-child { border-bottom: 0; }
+/* No sub-row variant. "Also up" was styled as a footnote -- smaller label,
+   tighter padding, no divider -- and next to Phoenix / API key / Last run it
+   just read as inconsistent (Blake, 2026-07-29). It is a fact of the same
+   kind as the others: another runner is listening. Same row, same everything.
+*/
+
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--rv-glass-st-green);
+  flex: none; align-self: center;
+}
+.dot.on { background: var(--rv-glass-st-green); }
+.dot.off { background: var(--rv-glass-st-red); }
+.dot.warn { background: var(--rv-glass-st-amber); }
+.dot.muted { background: var(--rv-glass-ink-soft); opacity: 0.5; }
+.dot.spacer { background: transparent; }
+/* A run that has not happened yet, or whose status we do not recognise: a
+   hollow ring, so the column still reads as a column. */
+.dot.idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--rv-glass-ink-soft); opacity: 0.55; }
+.dot.busy { background: var(--rv-glass-st-amber); animation: pop-pulse 1.1s ease-in-out infinite; }
+@keyframes pop-pulse { 50% { opacity: 0.45; } }
+
+.key { color: var(--rv-glass-ink-soft); flex: none; min-width: 66px; }
+.value { color: var(--rv-glass-ink); font-weight: 500; margin-left: auto; text-align: right; overflow-wrap: anywhere; }
+.value.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; font-weight: 400; }
+
+
+/* The start block (#119): what is down, what to do, the command, one copy. */
+.cmd-how { color: var(--rv-glass-ink-soft); font-size: 11.5px; line-height: 1.45; margin: 2px 0 6px; }
+.cmd-note { color: var(--rv-glass-ink-soft); font-size: 11px; line-height: 1.4; margin-top: 6px; opacity: 0.85; }
+
+/* Primary action — the one tinted control (open served directory). */
+.primary {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--rv-glass-tint-ink);
+  background: var(--rv-glass-tint);
+  border: 1px solid var(--rv-glass-border);
+  border-radius: var(--rv-radius-sm);
+  cursor: pointer;
+}
+.primary:hover { filter: brightness(1.05); }
+.primary:active { filter: brightness(0.97); }
+
+/* Copy-command cards (flat inset fills — no glass-on-glass). */
+#commands { margin-bottom: 12px; }
+.cmd {
+  background: var(--rv-glass-fill-inset);
+  border: 1px solid var(--rv-glass-border-soft);
+  border-radius: var(--rv-radius-sm);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.cmd:last-child { margin-bottom: 0; }
+.cmd-label { color: var(--rv-glass-ink-soft); font-size: 12px; margin-bottom: 5px; }
+.cmd-row { display: flex; align-items: center; gap: 8px; }
+.cmd-row code {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: var(--rv-radius-sm);
+  padding: 3px 6px;
+  overflow-wrap: anywhere;
+}
+@media (prefers-color-scheme: dark) {
+  .cmd-row code { background: rgba(255, 255, 255, 0.06); }
+}
+.copy {
+  flex: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--rv-glass-ink);
+  background: var(--rv-glass-fill);
+  border: 1px solid var(--rv-glass-border);
+  border-radius: var(--rv-radius-sm);
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.copy:hover { border-color: var(--rv-glass-ink-soft); }
+
+/* Setup / help — a low-key disclosure. */
+#setup { margin-top: 4px; }
+#setup summary { cursor: pointer; font-weight: 500; }
+.muted { color: var(--rv-glass-ink-soft); font-size: 12px; }
+ol { padding-left: 18px; margin: 6px 0; }
+li { margin-bottom: 6px; }
+code { font-size: 12px; }
+a { color: var(--rv-glass-st-amber); }
+@media (prefers-color-scheme: dark) { a { color: var(--rv-accent); } }

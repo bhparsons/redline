@@ -1,0 +1,10 @@
+node_modules/
+.history/
+.claude/*
+!.claude/settings.json
+tmp/
+.DS_Store
+dist/
+.redline.lock
+.mcp.json
+.agent-scope

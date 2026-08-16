@@ -1,0 +1,278 @@
+/* glass.css — the Liquid Glass material system: tokens + accessibility
+   fallbacks only. Extracted from overlay.css so the material system is a
+   standalone, independently mergeable unit (design/liquid-glass/glass.css is
+   the design source of truth this mirrors). Component rules that CONSUME
+   these tokens (backdrop-filter, layout, etc.) stay in overlay.css — this
+   file defines the vocabulary, it doesn't apply it.
+   Loaded before overlay.css (see manifest.json "css" order) so the custom
+   properties are defined before any consumer rule references them. */
+
+/* ============================================================
+   Glass tokens — light set (defaults)
+
+   Contrast pass (author review): the worst-case background is a plain
+   white document behind the glass, so every text token below is checked
+   against white. ink-soft 0.75 -> 6.97:1, ink-faint 0.62 -> 4.54:1 (AA),
+   chip inks 6.6-8.1:1 against their tint-over-white. Borders switched
+   from white-alpha (invisible on white) to low-alpha ink; fills raised
+   so the glass reads as a surface on white. Still glass — just legible.
+   ============================================================ */
+#rv-root {
+  --rv-glass-fill: rgba(255, 255, 255, 0.68);
+  --rv-glass-fill-strong: rgba(255, 255, 255, 0.80);
+  --rv-inset-fill: rgba(255, 255, 255, 0.55);
+  --rv-border: rgba(29, 34, 48, 0.18);
+  --rv-border-soft: rgba(29, 34, 48, 0.12);
+  --rv-specular: rgba(255, 255, 255, 0.85);
+  /* luminosity shift folded from the kit — separates glass from a white page.
+     Chained into every backdrop-filter; drops to 1.0 in dark (below). */
+  --rv-brightness: 0.97;
+  /* opaque fills for the reduced-transparency / contrast / no-backdrop-filter
+     fallbacks at the foot of this file. */
+  --rv-opaque: #f4f5f9;
+  --rv-opaque-dark: #1c2333;
+  /* theme-aware opaque surface (run-log pane; long-form reading = no glass) */
+  --rv-surface-opaque: var(--rv-opaque);
+  --rv-shadow:
+    0 1px 2px rgba(30, 34, 56, 0.06),
+    0 8px 24px rgba(30, 34, 56, 0.12),
+    0 24px 64px rgba(30, 34, 56, 0.10);
+  --rv-shadow-near:
+    0 1px 2px rgba(30, 34, 56, 0.08),
+    0 12px 32px rgba(30, 34, 56, 0.18);
+
+  --rv-ink: #1d2230;
+  --rv-ink-soft: rgba(29, 34, 48, 0.75);
+  --rv-ink-faint: rgba(29, 34, 48, 0.62);
+  --rv-hairline: rgba(29, 34, 48, 0.14);
+
+  --rv-primary-fill: rgba(29, 34, 48, 0.82);
+  --rv-primary-fill-hover: rgba(29, 34, 48, 0.92);
+  --rv-primary-ink: rgba(255, 255, 255, 0.96);
+
+  --rv-amber: rgba(255, 176, 46, 0.38);
+  --rv-amber-solid: #ffb02e;
+  --rv-ready: #34c98a;
+  --rv-danger: #96352b;
+
+  --rv-chip-open-bg: rgba(255, 176, 46, 0.32);
+  --rv-chip-open-ink: #6b4a00;
+  --rv-chip-good-bg: rgba(52, 201, 138, 0.26);
+  --rv-chip-good-ink: #14573c;
+  --rv-chip-bad-bg: rgba(224, 90, 90, 0.24);
+  --rv-chip-bad-ink: #7c2626;
+  --rv-chip-defer-bg: rgba(110, 130, 180, 0.26);
+  --rv-chip-defer-ink: #2b3c63;
+  --rv-chip-done-bg: rgba(110, 118, 138, 0.20);
+  --rv-chip-done-ink: #404653;
+
+  --rv-input-shadow: inset 0 1px 2px rgba(20, 24, 40, 0.06);
+
+  /* card status dots (Option A) — saturated fills with a white rim, so one
+     set works over both themes; deferred is the blue-gray of the defer chip,
+     resolved a neutral gray (needs-review statuses stay vivid, per the
+     never-dim rule). */
+  --rv-dot-open: #e08a00;
+  --rv-dot-addressed: #23a06f;
+  --rv-dot-declined: #cc4a3e;
+  --rv-dot-deferred: #6e82b4;
+  --rv-dot-resolved: #9aa0ad;
+
+  /* Audience chip fills + a distinct failed rail (#152). AI is the accent
+     blue, a note is a muted purple; failed is a deeper red than declined —
+     both mean "it didn't happen", one a judgement, the other a breakage. */
+  --rv-ai-bg: rgba(47, 111, 208, 0.20);
+  --rv-ai-ink: #23579f;
+  --rv-note-bg: rgba(122, 102, 148, 0.22);
+  --rv-note-ink: #5b4a71;
+  --rv-dot-failed: #96352b;
+  /* agent authorship chip — green, distinct from the AI/note audience (#156) */
+  --rv-agent-bg: rgba(35, 160, 111, 0.20);
+  --rv-agent-ink: #17614a;
+
+  /* Concentric radius scale (#148) — mirrors design/liquid-glass/glass.css, the
+     UI identity source of truth. THIS IS THE ONLY RADIUS SCALE; overlay.css
+     picks from these five and nothing else gets a radius. Concentric rule:
+     inner = max(outer − padding, --rv-radius-min). */
+  --rv-radius-xl: 16px;    /* top surfaces: popover/composer, scope modal,
+                              cheat sheet, run-log pane, panel */
+  --rv-radius-lg: 10px;    /* cards, group heads, notices, run strip, lock bar */
+  --rv-radius-sm: 6px;     /* insets INSIDE a card, and fields: textareas,
+                              selects, code bodies, outcome block, reply entry,
+                              scope block list, approve tick, audience chip */
+  --rv-radius-min: 4px;    /* page overlays on the document: anchor highlights,
+                              navigate flash, in-place-edit outline */
+  --rv-radius-pill: 999px; /* anything you press or flip: buttons, status chips,
+                              switches, dropdowns, knobs, and the pill capsule */
+}
+
+/* Dark token set — applied by two rules with IDENTICAL tokens (keep in sync):
+   1) Auto: a dark OS turns it on, unless the user forced Light.
+   2) Forced: .rv-theme-dark applies it regardless of OS. */
+@media (prefers-color-scheme: dark) {
+  #rv-root:not(.rv-theme-light) {
+    --rv-glass-fill: rgba(34, 38, 54, 0.74);
+    --rv-glass-fill-strong: rgba(40, 44, 62, 0.80);
+    --rv-inset-fill: rgba(255, 255, 255, 0.10);
+    --rv-border: rgba(255, 255, 255, 0.22);
+    --rv-border-soft: rgba(255, 255, 255, 0.14);
+    --rv-specular: rgba(255, 255, 255, 0.28);
+    --rv-brightness: 1.0;   /* don't darken an already-dark backdrop */
+    --rv-surface-opaque: var(--rv-opaque-dark);
+    --rv-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.30),
+      0 8px 24px rgba(0, 0, 0, 0.40),
+      0 24px 64px rgba(0, 0, 0, 0.35);
+    --rv-shadow-near:
+      0 1px 2px rgba(0, 0, 0, 0.35),
+      0 12px 32px rgba(0, 0, 0, 0.50);
+
+    --rv-ink: #f0f1f6;
+    --rv-ink-soft: rgba(240, 241, 246, 0.80);
+    --rv-ink-faint: rgba(240, 241, 246, 0.62);
+    --rv-hairline: rgba(255, 255, 255, 0.14);
+
+    --rv-primary-fill: rgba(240, 241, 246, 0.86);
+    --rv-primary-fill-hover: rgba(255, 255, 255, 0.95);
+    --rv-primary-ink: rgba(18, 20, 29, 0.95);
+
+    --rv-amber: rgba(255, 176, 46, 0.30);
+    --rv-amber-solid: #ffb02e;
+    --rv-ready: #34c98a;
+    --rv-danger: #f2a099;
+
+    --rv-chip-open-bg: rgba(255, 176, 46, 0.26);
+    --rv-chip-open-ink: #ffcf87;
+    --rv-chip-good-bg: rgba(52, 201, 138, 0.24);
+    --rv-chip-good-ink: #8fe6c0;
+    --rv-chip-bad-bg: rgba(224, 90, 90, 0.26);
+    --rv-chip-bad-ink: #f2a9a1;
+    --rv-chip-defer-bg: rgba(110, 130, 180, 0.28);
+    --rv-chip-defer-ink: #b3c4ee;
+    --rv-chip-done-bg: rgba(160, 168, 188, 0.22);
+    --rv-chip-done-ink: #c0c5d1;
+
+    --rv-ai-bg: rgba(91, 157, 240, 0.24);
+    --rv-ai-ink: #b9d3fb;
+    --rv-note-bg: rgba(166, 146, 196, 0.24);
+    --rv-note-ink: #d9cbf0;
+    --rv-dot-failed: #e08479;
+    --rv-agent-bg: rgba(52, 201, 138, 0.22);
+    --rv-agent-ink: #8fe6c0;
+
+    --rv-input-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+  }
+}
+#rv-root.rv-theme-dark {
+  --rv-surface-opaque: var(--rv-opaque-dark);
+  --rv-glass-fill: rgba(34, 38, 54, 0.74);
+  --rv-glass-fill-strong: rgba(40, 44, 62, 0.80);
+  --rv-inset-fill: rgba(255, 255, 255, 0.10);
+  --rv-border: rgba(255, 255, 255, 0.22);
+  --rv-border-soft: rgba(255, 255, 255, 0.14);
+  --rv-specular: rgba(255, 255, 255, 0.28);
+  --rv-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.30),
+    0 8px 24px rgba(0, 0, 0, 0.40),
+    0 24px 64px rgba(0, 0, 0, 0.35);
+  --rv-shadow-near:
+    0 1px 2px rgba(0, 0, 0, 0.35),
+    0 12px 32px rgba(0, 0, 0, 0.50);
+
+  --rv-ink: #f0f1f6;
+  --rv-ink-soft: rgba(240, 241, 246, 0.80);
+  --rv-ink-faint: rgba(240, 241, 246, 0.62);
+  --rv-hairline: rgba(255, 255, 255, 0.14);
+
+  --rv-primary-fill: rgba(240, 241, 246, 0.86);
+  --rv-primary-fill-hover: rgba(255, 255, 255, 0.95);
+  --rv-primary-ink: rgba(18, 20, 29, 0.95);
+
+  --rv-amber: rgba(255, 176, 46, 0.30);
+  --rv-amber-solid: #ffb02e;
+  --rv-ready: #34c98a;
+  --rv-danger: #f2a099;
+
+  --rv-chip-open-bg: rgba(255, 176, 46, 0.26);
+  --rv-chip-open-ink: #ffcf87;
+  --rv-chip-good-bg: rgba(52, 201, 138, 0.24);
+  --rv-chip-good-ink: #8fe6c0;
+  --rv-chip-bad-bg: rgba(224, 90, 90, 0.26);
+  --rv-chip-bad-ink: #f2a9a1;
+  --rv-chip-defer-bg: rgba(110, 130, 180, 0.28);
+  --rv-chip-defer-ink: #b3c4ee;
+  --rv-chip-done-bg: rgba(160, 168, 188, 0.22);
+  --rv-chip-done-ink: #c0c5d1;
+
+  --rv-ai-bg: rgba(91, 157, 240, 0.24);
+  --rv-ai-ink: #b9d3fb;
+  --rv-note-bg: rgba(166, 146, 196, 0.24);
+  --rv-note-ink: #d9cbf0;
+  --rv-dot-failed: #e08479;
+  --rv-agent-bg: rgba(52, 201, 138, 0.22);
+  --rv-agent-ink: #8fe6c0;
+
+  --rv-input-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+/* ============================================================
+   Accessibility + capability fallbacks
+
+   Opaque fills + no blur under OS reduced-transparency, OS increased contrast,
+   or no backdrop-filter support. Theme-aware: the forced .rv-theme-* classes and
+   the auto (prefers-color-scheme) path each pick the right opaque fill.
+   ============================================================ */
+@media (prefers-reduced-transparency: reduce) {
+  #rv-root {
+    --rv-glass-fill: var(--rv-opaque);
+    --rv-glass-fill-strong: var(--rv-opaque);
+  }
+  #rv-root.rv-theme-dark {
+    --rv-glass-fill: var(--rv-opaque-dark);
+    --rv-glass-fill-strong: var(--rv-opaque-dark);
+  }
+  #rv-root .rv-toolbar,
+  #rv-root .rv-panel,
+  #rv-root .rv-popover {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}
+@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
+  #rv-root:not(.rv-theme-light) {
+    --rv-glass-fill: var(--rv-opaque-dark);
+    --rv-glass-fill-strong: var(--rv-opaque-dark);
+  }
+}
+@media (prefers-contrast: more) {
+  #rv-root {
+    --rv-glass-fill-strong: var(--rv-opaque);
+    --rv-ink-soft: var(--rv-ink);
+  }
+  #rv-root.rv-theme-dark {
+    --rv-glass-fill-strong: var(--rv-opaque-dark);
+  }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  #rv-root:not(.rv-theme-light) {
+    --rv-glass-fill-strong: var(--rv-opaque-dark);
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  #rv-root {
+    --rv-glass-fill: var(--rv-opaque);
+    --rv-glass-fill-strong: var(--rv-opaque);
+  }
+  #rv-root.rv-theme-dark {
+    --rv-glass-fill: var(--rv-opaque-dark);
+    --rv-glass-fill-strong: var(--rv-opaque-dark);
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  @media (prefers-color-scheme: dark) {
+    #rv-root:not(.rv-theme-light) {
+      --rv-glass-fill: var(--rv-opaque-dark);
+      --rv-glass-fill-strong: var(--rv-opaque-dark);
+    }
+  }
+}

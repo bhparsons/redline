@@ -1,0 +1,2095 @@
+/* overlay.css — liquid-glass overlay chrome (target: design/02b-prototype-liquid-glass.html).
+   Glass tokens (light + dark sets) and accessibility fallbacks live in
+   glass.css, loaded first (see manifest.json) — this file is components that
+   consume that vocabulary via var(--rv-glass-*), plus layout/theme-toggle
+   wiring. Theme rules:
+     - Auto (default): light tokens on #rv-root; a dark OS switches to the dark
+       set via prefers-color-scheme, unless the user forced Light (the
+       :not(.rv-theme-light) guard steps aside for that choice).
+     - Forced: overlay.js stamps .rv-theme-light / .rv-theme-dark on #rv-root
+       from the panel-footer control (persisted in localStorage 'rv-theme').
+   THE THEME ONLY EVER RESTYLES OVERLAY CHROME — the user's document is never
+   touched (no mesh background, no doc rules). Everything is rv- namespaced
+   under #rv-root; the ONLY document-level styling is the docked-panel reflow
+   pair below (html transition + html.rv-panel-open margin). */
+
+/* Docked panel: opening it reduces the viewing window — content reflows,
+   the panel never covers text. (The bare html rule exists only so closing
+   the panel animates too; it sets nothing but the transition.) */
+html { transition: margin-right 0.25s ease; }
+html.rv-panel-open { margin-right: 336px; }
+/* #161: comment gutter — a narrow column beside the document. Panel open
+   widens the reflow to 382px (336 + 46); panel closed, a gutter-only
+   reflow of 50px. The gutter cannot overlap document text on any document. */
+html.rv-gutter-open { margin-right: 50px; }
+html.rv-panel-open.rv-gutter-open { margin-right: 382px; }
+
+/* ============================================================
+   Comment gutter (#161)
+   ============================================================ */
+/* The gutter is absolute inside the UNPOSITIONED #rv-root, so its containing
+   block is the initial containing block: right:N measures from the VIEWPORT
+   edge, and the html margin-right reflow does not move it (#239). With the
+   panel open the gutter must therefore be offset by the panel's own 336px to
+   sit in the 46px lane between the content edge and the panel — the rule
+   below. The column box is a positioning frame, not a visual: it is
+   transparent, pointer-events:none, and spans one viewport height (height:100%
+   of the ICB); the dots inside use document-coordinate `top` and deliberately
+   overflow it (nothing clips), so they render the full document's length. */
+#rv-root .rv-gutter {
+  position: absolute; top: 0; right: 0; width: 46px; height: 100%;
+  z-index: 99980; pointer-events: none;
+  /* NO transition on right: the column freezes during the html margin reflow
+     and SNAPS to its settled position at transitionend (overlay-gutter.js).
+     Animating it on its own clock next to the page's easing read as the dots
+     drifting slowly through the text (Blake, acceptance 2026-08-12). */
+}
+html.rv-panel-open #rv-root .rv-gutter { right: 336px; }
+#rv-root .rv-gutter.rv-hidden { display: none; }
+/* Reflow in progress: gone instantly, fade back once placed (#239). */
+#rv-root .rv-gutter { opacity: 1; transition: opacity 120ms ease; }
+#rv-root .rv-gutter.rv-gt-reflowing { opacity: 0; transition: none; }
+#rv-root .rv-gutter-dots {
+  position: absolute; top: 0; right: 0; width: 100%;
+}
+/* Dots: 9px, positioned by top (document coordinates), at 33px from the
+   right edge (outside lane — the add-pair will sit at 12px, inside). */
+#rv-root .rv-gt-dot {
+  position: absolute; right: 33px; width: 9px; height: 9px;
+  border-radius: 50%; cursor: pointer; pointer-events: auto;
+  transform: translateY(0); /* establish stacking context */
+  transition: box-shadow 120ms ease;
+}
+/* #219: the REAL 8px hit area. A transparent box-shadow paints but never
+   hit-tests; a pseudo-element is part of the dot, so pointer events anywhere
+   in the ring land on the dot itself. */
+#rv-root .rv-gt-dot::after {
+  content: ''; position: absolute; inset: -8px; border-radius: 50%;
+}
+#rv-root .rv-gt-dot.rv-gt-hover {
+  box-shadow: 0 0 0 8px rgba(0,0,0,0.06);
+}
+/* Four status tiers (#219). Fixed literals, NOT theme tokens: the dots sit
+   over the USER'S DOCUMENT, whose background never follows the overlay
+   theme — --rv-ink-faint flips near-white in dark mode, which made resolved
+   dots vanish over a white page. Values are the light-theme resolutions. */
+#rv-root .rv-gt-open {
+  background: #ffb02e;
+  border: 1px solid #ffb02e;
+}
+/* Actioned = the TEAL BULLSEYE (Blake's pick, acceptance 2026-08-12, option 4
+   of mock-tier-loudness): the agent hue in a double-stroke mark, so "the AI
+   answered — your review is the missing act" is the loudest thing at rest
+   and survives greyscale on structure alone. */
+#rv-root .rv-gt-actioned {
+  background: #178a9c;
+  border: 1px solid #178a9c;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), 0 0 0 3.5px #178a9c;
+}
+/* The hover halo and focus ring COMPOSE with the bullseye's ring — a bare
+   box-shadow override would amputate it. */
+#rv-root .rv-gt-dot.rv-gt-actioned.rv-gt-hover {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), 0 0 0 3.5px #178a9c,
+    0 0 0 8px rgba(0, 0, 0, 0.06);
+}
+#rv-root .rv-gt-dot.rv-gt-actioned:focus-visible {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), 0 0 0 3.5px #178a9c,
+    0 0 0 5.5px rgba(255, 255, 255, 0.9);
+}
+#rv-root .rv-gt-resolved {
+  background: rgba(29, 34, 48, 0.62);
+  border: 1px solid rgba(29, 34, 48, 0.62);
+  opacity: 0.5;
+}
+#rv-root .rv-gt-failed {
+  background: #cc4a3e;
+  border: 1px solid #cc4a3e;
+}
+/* Cluster chip: a count badge spanning the cluster's height.
+   Centred on the shared 37.5px axis like every other mark (Blake, live pass
+   2026-08-13). `right: 28px` only centred a chip exactly 19px wide: the box
+   grows LEFTWARD from a fixed right edge, so a two-digit count drifted off
+   the line the dots sit on — visible as the plain-number bubbles sitting
+   slightly left of the dashed fold marks beside them. translateX centres it
+   at any width. */
+#rv-root .rv-gt-chip {
+  position: absolute; right: 37.5px; transform: translateX(50%);
+  min-width: 19px; min-height: 19px;
+  border-radius: var(--rv-radius-pill, 999px);
+  display: flex; align-items: center; justify-content: center;
+  font: 600 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer; pointer-events: auto; padding: 0 4px;
+  color: #fff; /* fixed like the tier fills below — never theme-flipped */
+}
+#rv-root .rv-gt-chip.rv-gt-open { background: #ffb02e; }
+#rv-root .rv-gt-chip.rv-gt-actioned {
+  background: #178a9c;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), 0 0 0 3.5px #178a9c;
+}
+#rv-root .rv-gt-chip.rv-gt-resolved { background: rgba(29, 34, 48, 0.62); }
+#rv-root .rv-gt-chip.rv-gt-failed { background: #cc4a3e; }
+/* Orphan flag (#224): ONE dashed pill carrying the count of every comment
+   whose anchor no longer resolves, pinned to the top. (Same fixed-literal
+   rule as the tiers — it sits over the document.) */
+#rv-root .rv-gt-orphan {
+  /* Centred on the shared mark axis, 37.5px from the column's right edge —
+     the same line the dot (33+9/2), the chip and the edge pills sit on.
+     translateX centres it whatever the count's width, which `right` alone
+     cannot do once the pill grows past its 19px minimum (Blake, DECISION 3:
+     every mark shares one centre). */
+  position: absolute; top: 8px; right: 37.5px; transform: translateX(50%);
+  min-width: 19px; height: 19px;
+  padding: 0 4px; display: grid; place-items: center;
+  font: 600 9.5px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: rgba(29, 34, 48, 0.62);
+  border-radius: var(--rv-radius-pill, 999px);
+  border: 1.5px dashed rgba(29, 34, 48, 0.4);
+  cursor: pointer; pointer-events: auto;
+  background: rgba(255, 255, 255, 0.92);
+}
+/* #267: the hidden-comment stack at a fold. A cluster chip drawn HOLLOW and
+   DASHED, with the collapsed section's own triangle in front of the count —
+   a stack you cannot see must not read identically to one you can (Blake,
+   DECISION 1). Tier-coloured like every other mark, so a fold holding a
+   failed comment still shouts. Centred on the same 37.5px axis as the rest;
+   translateX carries it whatever the count's width. Fixed literals: it sits
+   over the user's document, same rule as the tiers. */
+#rv-root .rv-gt-fold {
+  position: absolute; right: 37.5px; transform: translateX(50%);
+  min-width: 19px; height: 19px; padding: 0 5px;
+  display: grid; place-items: center;
+  font: 600 9.5px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  border-radius: var(--rv-radius-pill, 999px);
+  border: 1.5px dashed currentColor;
+  background: rgba(255, 255, 255, 0.92);
+  cursor: pointer; pointer-events: auto;
+  transition: box-shadow 120ms ease;
+}
+/* Ink AND border take the tier (border is currentColor above). The open tier
+   uses a darker amber than the dot's #ffb02e: a 1.5px dashed line and 9.5px
+   text at that fill are unreadable on white, where a 9px solid disc is fine. */
+#rv-root .rv-gt-fold.rv-gt-open { color: #8a6a1d; border-color: #d9a83e; }
+#rv-root .rv-gt-fold.rv-gt-actioned { color: #12707f; border-color: #178a9c; }
+#rv-root .rv-gt-fold.rv-gt-resolved { color: rgba(29, 34, 48, 0.62); border-color: rgba(29, 34, 48, 0.4); }
+#rv-root .rv-gt-fold.rv-gt-failed { color: #cc4a3e; border-color: #cc4a3e; }
+#rv-root .rv-gt-fold.rv-gt-hover { box-shadow: 0 0 0 6px rgba(0, 0, 0, 0.06); }
+#rv-root .rv-gt-fold:focus-visible {
+  outline: 2px solid #1d4ed8; outline-offset: 2px;
+}
+/* #224: off-screen counters — viewport-pinned at the column's ends, centred
+   on the dot lane (overlay-gutter.js computes their right offset from the
+   column's). The column box spans one viewport height at the DOCUMENT top,
+   so absolute children would scroll away — hence fixed. Fixed literals: they
+   sit over the document, like the tiers. */
+#rv-root .rv-gt-edge {
+  position: fixed; z-index: 99981; pointer-events: auto; cursor: pointer;
+  min-width: 22px; padding: 4px 5px;
+  font: 600 9.5px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  text-align: center; color: #6b4a00;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(29, 34, 48, 0.14);
+  border-radius: var(--rv-radius-pill, 999px);
+  box-shadow: 0 1px 2px rgba(30, 34, 56, 0.08);
+}
+#rv-root .rv-gt-edge-top { top: 8px; }
+#rv-root .rv-gt-edge-bot { bottom: 8px; }
+/* #225: keyboard focus is visible over any document, in both themes — an
+   ink ring offset from a white halo, two channels rather than colour alone. */
+#rv-root .rv-gt-dot:focus-visible,
+#rv-root .rv-gt-chip:focus-visible,
+#rv-root .rv-gt-orphan:focus-visible,
+#rv-root .rv-gt-edge:focus-visible {
+  outline: 2px solid #1d2230; outline-offset: 2px;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+/* #225: reduced motion — the gutter's fade-back (#239's freeze/vanish) and
+   the dot's hover-halo transition stop animating. The freeze itself stays:
+   it is a correctness device, not decoration — it just snaps. */
+@media (prefers-reduced-motion: reduce) {
+  #rv-root .rv-gutter { transition: none; }
+  #rv-root .rv-gt-dot { transition: none; }
+}
+/* #220: hover tint — hovering a dot tints its anchor. One translucent
+   box-SET per cluster member, drawn as positioned divs in #rv-root over the
+   anchor's client rects (the quote's line boxes when findable, the block box
+   otherwise) — never merged, so overlapping members COMPOUND and read
+   darker. pointer-events: none keeps the text selectable; the dot stays the
+   only click target. Amber is theme-stable, safe over the document. */
+#rv-root .rv-gt-tint {
+  position: absolute; z-index: 99968; pointer-events: none;
+  border-radius: var(--rv-radius-min, 6px);
+  background: color-mix(in srgb, var(--rv-amber-solid, #ffb02e) 26%, transparent);
+}
+/* #220, panel closed: a one-line label beside the hovered dot (chrome, so
+   theme tokens apply; flat fill — no backdrop-filter outside the chrome set). */
+#rv-root .rv-gt-label {
+  position: absolute; right: 54px; margin-top: -5px;
+  max-width: 320px; padding: 3px 9px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  font: 500 12px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--rv-ink, #1d2230);
+  background: var(--rv-glass-fill-strong, rgba(255, 255, 255, 0.9));
+  border: 1px solid var(--rv-hairline, rgba(29, 34, 48, 0.14));
+  border-radius: var(--rv-radius-pill, 999px);
+  box-shadow: var(--rv-shadow-near, 0 1px 2px rgba(30, 34, 56, 0.08));
+  pointer-events: none;
+}
+/* #220, panel open: the hovered mark's cards light instead of a label. */
+#rv-root .rv-card-lit {
+  box-shadow: 0 0 0 2px var(--rv-amber-solid, #d98324);
+}
+/* ============================================================
+   #222: floating stack card — a cluster opens as ALL of its comments
+   ============================================================ */
+/* Transient, user-invoked overlay beside the gutter (panel closed). A
+   floating glass surface of the same class as the toolbar/popover — resting
+   chrome never covers text; transient, user-invoked overlays may
+   (design/comment-gutter.md's amendment to the component audit). Fixed
+   positioning: openStack clamps it fully inside the viewport, and any
+   document scroll dismisses it. */
+#rv-root .rv-stack {
+  position: fixed; width: 300px; max-height: 330px; overflow-y: auto;
+  z-index: 99990; padding: 6px;
+  border-radius: var(--rv-radius-lg, 10px);
+  background: var(--rv-glass-fill-strong, rgba(255, 255, 255, 0.9));
+  border: 1px solid var(--rv-hairline, rgba(29, 34, 48, 0.14));
+  box-shadow: var(--rv-shadow-far, 0 8px 24px rgba(30, 34, 56, 0.12));
+  -webkit-backdrop-filter: blur(16px) saturate(180%) brightness(var(--rv-brightness, 0.97));
+  backdrop-filter: blur(16px) saturate(180%) brightness(var(--rv-brightness, 0.97));
+}
+#rv-root .rv-stack-head {
+  font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--rv-ink-soft, rgba(29, 34, 48, 0.75));
+  padding: 6px 8px 2px;
+}
+/* Tray redesign (Blake, 2026-08-12): each comment is its own mini-card on
+   the glass tray — one card, one thread. Flat fills, never glass-on-glass. */
+#rv-root .rv-stack-item {
+  padding: 8px 9px; border-radius: var(--rv-radius-sm, 6px); cursor: pointer;
+  background: var(--rv-glass-fill-strong, rgba(255, 255, 255, 0.94));
+  border: 1px solid var(--rv-hairline, rgba(29, 34, 48, 0.14));
+  box-shadow: 0 1px 2px rgba(30, 34, 56, 0.06);
+}
+#rv-root .rv-stack-item.rv-stack-open { cursor: default; }
+#rv-root .rv-stack-item + .rv-stack-item,
+#rv-root .rv-stack-item + .rv-stack-slim,
+#rv-root .rv-stack-slim + .rv-stack-item,
+#rv-root .rv-stack-slim + .rv-stack-slim { margin-top: 7px; }
+/* A collapsed sibling while another card is expanded: avatar + quote. */
+#rv-root .rv-stack-slim {
+  display: flex; align-items: center; gap: 6px; padding: 5px 9px; cursor: pointer;
+  background: var(--rv-glass-fill-strong, rgba(255, 255, 255, 0.94));
+  border: 1px solid var(--rv-hairline, rgba(29, 34, 48, 0.14));
+  border-radius: var(--rv-radius-sm, 6px);
+  font: 11.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--rv-ink-soft, rgba(29, 34, 48, 0.75));
+}
+#rv-root .rv-stack-slim-q {
+  font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#rv-root .rv-stack-back {
+  display: block; background: none; border: 0; cursor: pointer;
+  padding: 4px 8px 6px; text-align: left;
+  font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--rv-ink-soft, rgba(29, 34, 48, 0.75));
+}
+#rv-root .rv-stack-back:hover { color: var(--rv-ink, #1d2230); }
+/* The expanded card's thread — the tray is a reading surface now. */
+#rv-root .rv-stack-thread {
+  border-top: 1px solid var(--rv-hairline, rgba(29, 34, 48, 0.14));
+  margin-top: 6px; padding-top: 6px;
+  font: 12px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--rv-ink-soft, rgba(29, 34, 48, 0.75));
+}
+#rv-root .rv-stack-turn b { color: var(--rv-ink, #1d2230); font-weight: 600; }
+#rv-root .rv-stack-quote {
+  font: italic 11px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--rv-ink-soft, rgba(29, 34, 48, 0.75));
+  border-left: 2px solid var(--rv-amber-solid, #ffb02e);
+  padding-left: 6px; margin: 4px 0;
+}
+#rv-root .rv-stack-body {
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--rv-ink, #1d2230);
+  margin: 4px 0 6px;
+}
+/* #222: the chip naming what a gutter click selected — the visible, reversible
+   way out of it, and the only thing on screen that says one is active.
+   #269 (Blake, 2026-08-13): it lives on the TITLE line and takes the count's
+   slot while it is up, so the header gains no height for it — measured at
+   217px free there after Send all and the close button, against 147px for the
+   longest label. Two targets in one pill: the label widens, the × leaves. */
+#rv-root .rv-rowchip {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0;
+  padding: 2px 4px 2px 8px;
+  border-radius: var(--rv-radius-pill, 999px);
+  background: color-mix(in srgb, var(--rv-amber-solid, #ffb02e) 24%, transparent);
+  border: 1px solid var(--rv-amber-solid, #ffb02e);
+  color: var(--rv-ink, #1d2230);
+}
+#rv-root .rv-rowchip.rv-hidden { display: none; }
+#rv-root .rv-rowchip-label {
+  font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: none; border: 0; padding: 0; color: inherit;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+/* Widening is a real action, so it looks like one — but only when there is
+   something to widen to. With nothing hidden the label is inert text, not a
+   button that does nothing when pressed. */
+#rv-root .rv-rowchip-label:not(:disabled) { cursor: pointer; text-decoration: underline; }
+#rv-root .rv-rowchip-label:disabled { cursor: default; opacity: 1; }
+#rv-root .rv-rowchip-x {
+  font: 700 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: none; border: 0; cursor: pointer; padding: 0 3px;
+  color: color-mix(in srgb, var(--rv-ink, #1d2230) 55%, transparent);
+  flex: 0 0 auto; line-height: 1;
+}
+#rv-root .rv-rowchip-x:hover { color: var(--rv-ink, #1d2230); }
+
+/* #161: highlight on a card scrolled to by a gutter dot click. #260 slowed
+   the fade to 2.5s — light and fade, with time to scan for what lit up. */
+#rv-root .rv-card-flash {
+  animation: rv-card-flash 2.5s ease-out;
+}
+@keyframes rv-card-flash {
+  0% { box-shadow: 0 0 0 2px var(--rv-amber-solid, #d98324); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+
+/* ============================================================
+   Floating toolbar pill
+   ============================================================ */
+#rv-root .rv-toolbar {
+  position: fixed; right: 18px; bottom: 18px; z-index: 99990;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px 9px 16px;
+  border-radius: var(--rv-radius-pill);
+  font-family: system-ui, -apple-system, sans-serif; font-size: 13px;
+  color: var(--rv-ink);
+  background: var(--rv-glass-fill-strong);
+  /* pill surface: smaller 16px blur (kit convention for toolbar/toast/pill) */
+  -webkit-backdrop-filter: blur(16px) saturate(180%) brightness(var(--rv-brightness));
+  backdrop-filter: blur(16px) saturate(180%) brightness(var(--rv-brightness));
+  border: 1px solid var(--rv-border);
+  box-shadow:
+    inset 0 1px 0 var(--rv-specular),
+    inset 0 -8px 16px -12px rgba(255, 255, 255, 0.5),
+    var(--rv-shadow-near);
+  /* matches the html.rv-panel-open reflow timing so the pill and the
+     panel move together */
+  transition: right 0.25s ease;
+}
+/* Panel open: shift the pill left of the panel edge (18px gutter +
+   336px docked-panel width) so it never sits over the panel footer.
+   overlay.js toggles rv-shifted together with html.rv-panel-open. */
+#rv-root .rv-toolbar.rv-shifted { right: calc(18px + 336px); }
+
+
+#rv-root .rv-toolbar button {
+  font: inherit; font-size: 12.5px;
+  color: var(--rv-ink-soft); cursor: pointer;
+  padding: 5px 12px; border-radius: var(--rv-radius-pill);
+  border: 1px solid var(--rv-border-soft);
+  background: var(--rv-inset-fill);
+  box-shadow: inset 0 1px 0 var(--rv-specular);
+  transition: background 120ms ease, color 120ms ease;
+}
+#rv-root .rv-toolbar button:hover { background: var(--rv-glass-fill-strong); color: var(--rv-ink); }
+#rv-root .rv-toolbar button:focus-visible { outline: 2px solid var(--rv-amber-solid); outline-offset: 2px; }
+
+#rv-root .rv-status { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; color: var(--rv-ink); }
+
+/* the glass-lens status dot: rim light + inner glow */
+#rv-root .rv-dot {
+  width: 9px; height: 9px; border-radius: var(--rv-radius-pill);
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.95), var(--rv-ready) 55%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.55),
+    0 0 10px 1px rgba(52, 201, 138, 0.55);
+}
+#rv-root .rv-dot-off {
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.9), #b2b2b8 55%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.45);
+}
+/* rv-pulse drives the busy chip pip (rv-cs-busy) and the scope pulse. */
+@keyframes rv-pulse {
+  50% { opacity: 0.55; }
+}
+
+#rv-root .rv-hint { color: var(--rv-ink-faint); }
+
+/* ============================================================
+   Mode switch + status chip (Phase 4, #149)
+
+   The bottom-right bar carries a status chip and a switch whose knob draws a
+   pencil in both positions. "Redline active" is AMBER, never red: red is the
+   failed-run / declined colour, and the two states have to stay apart in the
+   bar (design/phase4-interaction-model.md, components §D). Running is the
+   accent blue, so active/running/failed are three distinct colours.
+   ============================================================ */
+#rv-root .rv-chipstate {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 3px 6px 3px 4px; border-radius: var(--rv-radius-pill);
+  font-size: 12.5px; color: var(--rv-ink-soft); white-space: nowrap;
+}
+/* NEUTRAL, not green (#191, decision 22). Green now means AN AGENT IS
+   ATTACHED, and the Redline pill is always on — "the tool is on" is not news,
+   and a permanent green dot beside a meaningful green banner is the fastest way
+   to make the banner unreadable. The pill keeps its amber/blue/red states,
+   which are all events; only the resting colour gives way. */
+#rv-root .rv-pip {
+  width: 8px; height: 8px; border-radius: var(--rv-radius-pill); flex: none;
+  background: var(--rv-ink-faint); box-shadow: 0 0 0 3px var(--rv-inset-fill);
+}
+#rv-root .rv-chipstate.rv-cs-mode { color: var(--rv-amber-solid); font-weight: 600; }
+#rv-root .rv-chipstate.rv-cs-mode .rv-pip { background: var(--rv-amber-solid); box-shadow: 0 0 0 3px rgba(255, 176, 46, 0.20); }
+#rv-root .rv-chipstate.rv-cs-busy .rv-pip { background: var(--rv-accent); box-shadow: none; animation: rv-pulse 1.1s ease-in-out infinite; }
+#rv-root .rv-chipstate.rv-cs-lock { color: var(--rv-ink); }
+#rv-root .rv-chipstate.rv-cs-lock .rv-pip { background: var(--rv-amber-solid); box-shadow: 0 0 0 3px rgba(255, 176, 46, 0.20); }
+#rv-root .rv-chipstate.rv-cs-fail { color: var(--rv-danger); }
+#rv-root .rv-chipstate.rv-cs-fail .rv-pip { background: var(--rv-dot-declined); box-shadow: none; }
+
+/* the mode switch: a track + a knob that draws a pencil in BOTH positions, so
+   the tool reads as "on by default" rather than off-until-armed. */
+#rv-root .rv-sw-mode {
+  display: inline-flex; align-items: center; flex: none; cursor: pointer;
+}
+#rv-root .rv-sw-track {
+  width: 38px; height: 22px; border-radius: var(--rv-radius-pill); position: relative;
+  background: rgba(120, 128, 148, 0.38); border: 1px solid var(--rv-border-soft);
+  transition: background 140ms ease;
+}
+#rv-root .rv-sw-mode[aria-pressed="true"] .rv-sw-track { background: var(--rv-amber-solid); }
+#rv-root .rv-sw-knob {
+  position: absolute; top: 1.5px; left: 1.5px; width: 17px; height: 17px;
+  border-radius: var(--rv-radius-pill); background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  display: grid; place-items: center; transition: transform 140ms ease;
+}
+/* the pencil is the MODE switch's knob only; the audience switch reuses the
+   track/knob geometry but stays plain (#151). */
+#rv-root .rv-sw-mode .rv-sw-knob::after { content: '\270E'; font-size: 11px; line-height: 1; color: #2a2f3d; }
+#rv-root .rv-sw-mode[aria-pressed="true"] .rv-sw-knob,
+#rv-root .rv-aud-sw[aria-pressed="true"] .rv-sw-knob { transform: translateX(16px); }
+#rv-root .rv-sw-mode:focus-visible { outline: none; }
+#rv-root .rv-sw-mode:focus-visible .rv-sw-track { outline: 2px solid var(--rv-amber-solid); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  #rv-root .rv-sw-track, #rv-root .rv-sw-knob { transition: none; }
+}
+
+/* the ? button: a round icon button, quiet until hover */
+#rv-root .rv-help-btn {
+  flex: none; width: 26px; height: 26px; padding: 0; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--rv-radius-pill); font-size: 12.5px;
+}
+
+/* the cheat sheet: a centred modal over the page, opened by ? or the button */
+#rv-root .rv-cheat {
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  z-index: 99994; width: min(420px, calc(100vw - 40px));
+  padding: 18px 20px; border-radius: var(--rv-radius-xl);
+  color: var(--rv-ink); background: var(--rv-glass-fill-strong);
+  border: 1px solid var(--rv-border);
+  /* flat glass fill, no backdrop-filter — matches the scope modal; blur is
+     reserved for the toolbar/panel/popover chrome (09-liquid-glass-notes). */
+  box-shadow: var(--rv-shadow);
+}
+#rv-root .rv-cheat h3 { margin: 0 0 12px; font-size: 13.5px; font-weight: 600; }
+#rv-root .rv-cheat dl { display: grid; grid-template-columns: 78px 1fr; gap: 7px 12px; margin: 0; font-size: 12.5px; }
+#rv-root .rv-cheat dt { text-align: right; }
+#rv-root .rv-cheat dd { margin: 0; color: var(--rv-ink-soft); }
+#rv-root .rv-cheat kbd {
+  font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 3px 6px; border-radius: var(--rv-radius-min);
+  border: 1px solid var(--rv-border-soft); background: var(--rv-inset-fill); color: var(--rv-ink);
+}
+#rv-root .rv-cheat-note { margin-top: 13px; font-size: 11.5px; color: var(--rv-ink-faint); }
+
+/* the arrow-key cursor: a ring on the comment ↑/↓ has landed on (never a
+   resolve target — A resolves the card you OPENED). */
+#rv-root .rv-card-cycled { outline: 2px solid var(--rv-amber-solid); outline-offset: 1px; }
+
+/* ============================================================
+   Shared glass buttons — quiet glass default, tinted-glass primary
+   ============================================================ */
+#rv-root .rv-btn {
+  font-family: system-ui, -apple-system, sans-serif; font-size: 12.5px;
+  color: var(--rv-ink-soft); cursor: pointer;
+  padding: 5px 12px; border-radius: var(--rv-radius-pill);
+  border: 1px solid var(--rv-border-soft);
+  background: var(--rv-inset-fill);
+  box-shadow: inset 0 1px 0 var(--rv-specular);
+  transition: background 120ms ease, color 120ms ease;
+}
+#rv-root .rv-btn:hover { background: var(--rv-glass-fill-strong); color: var(--rv-ink); }
+#rv-root .rv-btn:disabled { opacity: 0.5; cursor: default; }
+#rv-root .rv-btn:focus-visible,
+#rv-root .rv-seg-btn:focus-visible,
+#rv-root .rv-strip-dismiss:focus-visible,
+#rv-root .rv-popover textarea:focus-visible {
+  outline: 2px solid var(--rv-amber-solid); outline-offset: 2px;
+}
+#rv-root .rv-btn-primary {
+  background: var(--rv-primary-fill); color: var(--rv-primary-ink);
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.30), 0 2px 8px rgba(20, 24, 40, 0.25);
+}
+#rv-root .rv-btn-primary:hover { background: var(--rv-primary-fill-hover); color: var(--rv-primary-ink); }
+
+/* ============================================================
+   Comments panel (docked — width matches html.rv-panel-open margin)
+   ============================================================ */
+#rv-root .rv-panel {
+  position: fixed; top: 0; right: 0; width: 336px; height: 100vh; z-index: 99980;
+  display: flex; flex-direction: column;
+  font-family: system-ui, -apple-system, sans-serif; font-size: 13.5px;
+  color: var(--rv-ink);
+  background: var(--rv-glass-fill);
+  -webkit-backdrop-filter: blur(24px) saturate(180%) brightness(var(--rv-brightness));
+  backdrop-filter: blur(24px) saturate(180%) brightness(var(--rv-brightness));
+  border-left: 1px solid var(--rv-border);
+  box-shadow:
+    inset 0 1px 0 var(--rv-specular),
+    inset 1px 0 0 var(--rv-border-soft),
+    var(--rv-shadow);
+}
+
+#rv-root .rv-panel-header {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 12px 16px 10px;
+  font-weight: 600; color: var(--rv-ink);
+  border-bottom: 1px solid var(--rv-hairline);
+  /* extra frost where the header sits over scrolled cards */
+  background: linear-gradient(to bottom, var(--rv-inset-fill), transparent);
+  position: relative; z-index: 1;
+}
+/* scroll-edge frost: a soft band of the panel fill reinforcing the header
+   (and footer, below) edge where card content scrolls beneath it — a flat
+   gradient, deliberately NOT a second backdrop-filter (no glass-on-glass). */
+#rv-root .rv-panel-header::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 14px;
+  background: linear-gradient(to bottom, var(--rv-glass-fill), transparent);
+  pointer-events: none;
+}
+#rv-root .rv-header-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+#rv-root .rv-panel-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#rv-root .rv-header-btns { display: flex; align-items: center; gap: 6px; flex: none; }
+#rv-root .rv-undo { flex: none; font-size: 11.5px; padding: 3px 10px; }
+#rv-root .rv-send-all { flex: none; font-size: 11.5px; padding: 3px 10px; }
+
+/* Audience-state row (#154): what new comments will be + a Switch. */
+#rv-root .rv-audience-state {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11.5px; color: var(--rv-ink-soft);
+  padding: 6px 9px; border-radius: var(--rv-radius-lg);
+  background: var(--rv-inset-fill); border: 1px solid var(--rv-border-soft);
+}
+#rv-root .rv-aud-dot { width: 7px; height: 7px; border-radius: var(--rv-radius-pill); flex: none; background: var(--rv-accent); }
+#rv-root .rv-audience-state.rv-aud-note .rv-aud-dot { background: var(--rv-dot-resolved); }
+#rv-root .rv-aud-text { flex: 1; min-width: 0; }
+#rv-root .rv-aud-switch { flex: none; padding: 2px 9px; font-size: 11.5px; }
+
+/* Filters (#154): two dropdowns on one line — status × audience. */
+#rv-root .rv-filters { display: flex; align-items: center; gap: 6px; }
+#rv-root .rv-filter-sel {
+  flex: 1; min-width: 0;
+  font-family: system-ui, -apple-system, sans-serif; font-size: 11.5px;
+  color: var(--rv-ink); cursor: pointer;
+  padding: 4px 8px; border-radius: var(--rv-radius-pill);
+  border: 1px solid var(--rv-border-soft); background: var(--rv-inset-fill);
+}
+#rv-root .rv-filter-sel:focus-visible { outline: 2px solid var(--rv-amber-solid); outline-offset: 1px; }
+
+/* Panel search (#268): its own row under the dropdowns, per the mock
+   (design/mock-panel-fold-search-2026-08-13.html). A fifth control on the
+   filter row is what already squeezed the row chip out of sight. */
+#rv-root .rv-searchrow { display: flex; }
+#rv-root .rv-searchbox {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+  padding: 4px 8px; border-radius: var(--rv-radius-pill);
+  border: 1px solid var(--rv-border-soft); background: var(--rv-inset-fill);
+}
+#rv-root .rv-searchbox:focus-within { border-color: var(--rv-amber-solid); }
+#rv-root .rv-searchbox.rv-searchbox-on { border-color: var(--rv-amber-solid); }
+#rv-root .rv-search-mag { flex: none; color: var(--rv-ink-soft); font-size: 13px; line-height: 1; }
+#rv-root .rv-search-input {
+  flex: 1; min-width: 0; border: 0; background: transparent; padding: 0;
+  font-family: system-ui, -apple-system, sans-serif; font-size: 11.5px;
+  font-weight: 500; color: var(--rv-ink);
+}
+#rv-root .rv-search-input:focus { outline: none; }
+#rv-root .rv-search-input::placeholder { color: var(--rv-ink-soft); font-weight: 400; }
+#rv-root .rv-search-clear {
+  flex: none; padding: 0 2px; border: 0; background: transparent; cursor: pointer;
+  color: var(--rv-ink-soft); font-size: 11px; line-height: 1;
+}
+#rv-root .rv-search-clear:hover { color: var(--rv-ink); }
+/* What the search says about itself — the invalid-handle refusal and the
+   reached-past-your-lens notice. One slot, never both at once. */
+#rv-root .rv-search-note {
+  padding: 5px 9px; border-radius: var(--rv-radius-lg);
+  font: 400 11px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--rv-ink); background: color-mix(in srgb, var(--rv-amber-solid, #ffb02e) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--rv-amber-solid, #ffb02e) 55%, transparent);
+}
+/* The hit itself, inside a card. */
+#rv-root mark.rv-hit {
+  background: color-mix(in srgb, var(--rv-amber-solid, #ffb02e) 45%, transparent);
+  color: inherit; border-radius: 2px; padding: 0 1px;
+}
+#rv-root .rv-empty-clear { margin-top: 10px; }
+
+/* round icon button (the sidecar close ×, and other bare-glyph controls) */
+#rv-root .rv-icon-btn {
+  flex: none; width: 26px; height: 26px; padding: 0; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--rv-radius-pill); font-size: 15px;
+  color: var(--rv-ink-soft); cursor: pointer;
+  border: 1px solid var(--rv-border-soft); background: var(--rv-inset-fill);
+}
+#rv-root .rv-icon-btn:hover { background: var(--rv-glass-fill-strong); color: var(--rv-ink); }
+#rv-root .rv-icon-btn:focus-visible { outline: 2px solid var(--rv-amber-solid); outline-offset: 2px; }
+
+#rv-root .rv-empty { padding: 24px 16px; color: var(--rv-ink-soft); }
+
+#rv-root .rv-hidden { display: none; }
+
+/* ============================================================
+   Uninstrumented-page notice — "Prepare page" (flat translucent fill,
+   like the cards: never a backdrop-filter outside the chrome layer)
+   ============================================================ */
+#rv-root .rv-notice {
+  display: flex; align-items: center; gap: 10px;
+  margin: 10px 12px 0; padding: 10px 12px;
+  border-radius: var(--rv-radius-lg);
+  font-size: 12.5px; color: var(--rv-ink);
+  background: var(--rv-inset-fill);
+  border: 1px solid var(--rv-border-soft);
+  border-left: 3px solid var(--rv-amber-solid);
+  box-shadow: inset 0 1px 0 var(--rv-specular);
+}
+#rv-root .rv-notice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#rv-root .rv-notice-title { font-weight: 600; }
+#rv-root .rv-notice-sub { font-size: 11.5px; color: var(--rv-ink-faint); margin-top: 2px; }
+#rv-root .rv-notice-error { color: var(--rv-danger); }
+#rv-root .rv-notice-error:empty { display: none; }
+#rv-root .rv-notice .rv-btn { flex: none; white-space: nowrap; }
+#rv-root .rv-notice.rv-hidden { display: none; }
+
+/* ============================================================
+   THE liveness indicator (#196 slice 1) — one component, one slot.
+
+   In the panel, below the filters and above the first section. Not a stack of
+   pills and not an enumeration of error types: three states, each naming what
+   the author does about it. ABSENCE IS THE DEFAULT — a healthy runner draws
+   nothing here, because a badge that is always up is a badge nobody reads.
+
+   Green is reserved for an ATTACHED AGENT elsewhere in this phase, so the base
+   green here is recovery-in-progress and nothing else claims it.
+   ============================================================ */
+#rv-root .rv-abn {
+  margin: 10px 12px 0; padding: 8px 10px;
+  border-radius: var(--rv-radius-sm);
+  font-size: 11.5px; color: var(--rv-ink);
+  background: var(--rv-chip-good-bg); border-left: 3px solid var(--rv-dot-addressed);
+}
+#rv-root .rv-abn.rv-hidden { display: none; }
+/* #207: the down-state headline ("Runner offline — do not reload page.") runs
+   long enough at 312px that the "retrying Ns" readout no longer fits beside
+   it on one line — wrap rather than overflow. Every other state's text is
+   short enough that this never triggers. */
+#rv-root .rv-abn-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+#rv-root .rv-abn-dot {
+  flex: none; width: 7px; height: 7px; border-radius: var(--rv-radius-pill);
+  background: var(--rv-dot-addressed); box-shadow: 0 0 0 3px var(--rv-chip-good-bg);
+}
+#rv-root .rv-abn-who { font-weight: 600; }
+#rv-root .rv-abn-age {
+  margin-left: auto; flex: none;
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--rv-ink-faint);
+}
+/* #235: read-receipt chips — "caught up" or "N behind" */
+#rv-root .rv-abn-caught {
+  flex: none; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--rv-good, #2f6b3d); padding: 1px 5px; border-radius: var(--rv-radius-min);
+  background: var(--rv-good-bg, #f4faf5);
+}
+#rv-root .rv-abn-behind {
+  flex: none; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--rv-amber-solid, #d98324); padding: 1px 5px; border-radius: var(--rv-radius-min);
+  background: var(--rv-chip-open-bg, #fffbeb);
+}
+/* #208: watcher was blocked on a held block */
+#rv-root .rv-abn-blocked { color: var(--rv-amber-solid, #d98324); }
+#rv-root .rv-abn-x {
+  font: inherit; font-size: 12px; line-height: 1; flex: none; margin-left: auto;
+  cursor: pointer; padding: 2px 5px; border-radius: var(--rv-radius-min);
+  border: 1px solid transparent; background: none; color: var(--rv-ink-soft);
+}
+#rv-root .rv-abn-x:hover { border-color: var(--rv-border-soft); }
+#rv-root .rv-abn-sub { margin-top: 3px; font-size: 11px; line-height: 1.45; color: var(--rv-ink-soft); }
+/* #207, Blake 2026-08-15: the retry counter rides on the SUB line, hard right,
+   not on the headline row. At 312px the headline fills its row, so a counter
+   up there wrapped to a line of its own and put a stripe of nothing between
+   the two sentences that belong together. `align-items: end` sits it on the
+   sub line's LAST wrapped line, which is where the spare width actually is. */
+#rv-root .rv-abn-sub-split { display: flex; align-items: end; gap: 8px; }
+#rv-root .rv-abn-sub-split .rv-abn-subtext { min-width: 0; }
+/* down: RED, and still an invitation — the sub line says what still works */
+#rv-root .rv-abn-down { background: var(--rv-chip-bad-bg); border-left-color: var(--rv-dot-declined); }
+#rv-root .rv-abn-down .rv-abn-dot { background: var(--rv-dot-declined); box-shadow: 0 0 0 3px var(--rv-chip-bad-bg); }
+/* warn: a replay that could not land. Amber, and dismissible — the comment is
+   still on the device, so this is a thing to do rather than a thing lost. */
+#rv-root .rv-abn-warn { background: var(--rv-chip-open-bg); border-left-color: var(--rv-amber-solid); }
+#rv-root .rv-abn-warn .rv-abn-dot { background: var(--rv-amber-solid); box-shadow: 0 0 0 3px var(--rv-chip-open-bg); }
+#rv-root .rv-abn-prog {
+  margin-top: 7px; height: 4px; border-radius: var(--rv-radius-pill); overflow: hidden;
+  background: var(--rv-inset-fill);
+}
+#rv-root .rv-abn-prog i {
+  display: block; height: 100%; background: var(--rv-dot-addressed);
+  transition: width 160ms ease;
+}
+/* live: GREEN means an agent is attached (#191, decision 20). It is the base
+   .rv-abn look, spelled out so the state is legible in the sheet rather than
+   inherited by accident. Because green now MEANS something, the always-on
+   Redline pill had to give it up — see .rv-pip, decision 22. */
+#rv-root .rv-abn-live { background: var(--rv-chip-good-bg); border-left-color: var(--rv-dot-addressed); }
+#rv-root .rv-abn-live .rv-abn-dot { background: var(--rv-dot-addressed); box-shadow: 0 0 0 3px var(--rv-chip-good-bg); }
+/* gone: the watcher stopped. AMBER, not red — nothing is failing, something
+   merely stopped — and dismissible, because once you know, you know. */
+#rv-root .rv-abn-gone { background: var(--rv-chip-open-bg); border-left-color: var(--rv-amber-solid); }
+#rv-root .rv-abn-gone .rv-abn-dot { background: var(--rv-amber-solid); box-shadow: 0 0 0 3px var(--rv-chip-open-bg); }
+/* plain: hold is on and nobody is watching (#196 slice 3). Neutral, because
+   this is a setting the author turned on rather than something going wrong —
+   but never empty, which is the whole reason hold is allowed to persist. */
+#rv-root .rv-abn-plain { background: var(--rv-inset-fill); border-left-color: var(--rv-ink-soft); }
+/* Hold rides INSIDE the banner (decision 21) so it cannot be stranded. */
+#rv-root .rv-abn-hold {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--rv-border-soft);
+}
+#rv-root .rv-abn-plain .rv-abn-hold { margin-top: 0; padding-top: 0; border-top: none; }
+#rv-root .rv-abn-hold-lab { display: flex; align-items: center; gap: 7px; min-width: 0; }
+#rv-root .rv-abn-hold-cnt {
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--rv-ink-soft);
+}
+#rv-root .rv-abn-sw {
+  flex: none; width: 26px; height: 15px; padding: 0; cursor: pointer;
+  position: relative; border-radius: var(--rv-radius-pill);
+  background: var(--rv-inset-fill); border: 1px solid var(--rv-border);
+}
+#rv-root .rv-abn-sw::after {
+  content: ''; position: absolute; top: 1px; left: 1px; width: 11px; height: 11px;
+  border-radius: var(--rv-radius-pill); background: var(--rv-ink-soft);
+}
+#rv-root .rv-abn-sw.rv-abn-sw-on { background: var(--rv-dot-addressed); border-color: transparent; }
+#rv-root .rv-abn-sw.rv-abn-sw-on::after { left: auto; right: 1px; background: #fff; }
+#rv-root .rv-abn-sw:disabled { cursor: default; opacity: 0.5; }
+#rv-root .rv-abn-sw:focus-visible { outline: 2px solid var(--rv-amber-solid); outline-offset: 2px; }
+#rv-root .rv-abn-hold-btn {
+  font: inherit; font-size: 11px; margin-left: auto; flex: none; cursor: pointer;
+  padding: 3px 10px; border-radius: var(--rv-radius-sm);
+  border: 1px solid var(--rv-border-soft); background: var(--rv-inset-fill); color: var(--rv-ink);
+}
+#rv-root .rv-abn-hold-btn:disabled { cursor: default; opacity: 0.5; }
+#rv-root .rv-abn-hold-btn:focus-visible { outline: 2px solid var(--rv-amber-solid); outline-offset: 2px; }
+
+/* ---- hover-to-explain: a capsule BELOW a refused control, on approach ----
+   A greyed control that will not say why is a dead end. One sentence for the
+   cause, one for the reassurance, and it appears only when you reach for it —
+   never over the document, never a permanent label. Only while the control is
+   actually refused (.rv-explaining), so it cannot fire on a live button. */
+#rv-root .rv-explain { position: relative; display: inline-flex; }
+/* #214: the capsule opens from a mouseenter listener on the WRAP, and Chrome
+   does not dispatch mouse events from a disabled form control. The wrap is
+   exactly the size of the button it holds, so the disabled button was the
+   hit-test target and the wrap never saw the cursor — every refusal was
+   silent. The old build got away with a nested capsule revealed by CSS
+   :hover, which hit-tests fine over a disabled child; a JS listener does not.
+   Letting the hit fall through to the wrap is what makes the listener reachable.
+   The button is disabled, so it has no click to lose. */
+#rv-root .rv-explaining > button:disabled { pointer-events: none; }
+/* …and it must still be hideable. .rv-hidden and .rv-explain have the same
+   specificity and .rv-explain is declared later, so a wrapper carrying both
+   would stay on screen — which is how Undo, hidden when there is nothing to
+   undo, would have appeared permanently the moment it gained a capsule. */
+#rv-root .rv-explain.rv-hidden { display: none; }
+/* A refused control in the card's 22px control row: the wrapper is the flex
+   item now, so the flex:none and the height that made the row rigid have to
+   sit on it rather than on the button inside it (#197's fix by construction
+   must survive the audience chip and the tick gaining a capsule). */
+#rv-root .rv-card-controls > .rv-explain { flex: none; height: 22px; }
+#rv-root .rv-why {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 9; width: 244px;
+  text-align: left; opacity: 0; pointer-events: none; transition: opacity 130ms ease;
+}
+#rv-root .rv-explaining:hover > .rv-why,
+#rv-root .rv-explaining:focus-within > .rv-why,
+#rv-root .rv-pencil-off:hover > .rv-why { opacity: 1; }
+/* #214: the capsule is a FLOATING CHROME layer and carries the blur.
+   It sat inside a card until now, which is why the guardrail banned
+   backdrop-filter on it — glass-on-glass. Drawn over the document from
+   #rv-root it is the same kind of surface as the selection pill, which joined
+   the chrome set in #150 on exactly this reasoning. The strengthened fill
+   alone (0.4.10) was measured on 0.4.11 and still read through to the
+   document underneath. */
+#rv-root .rv-capsule {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 9px 11px; border-radius: var(--rv-radius-lg);
+  font-size: 12.5px; font-weight: 400; color: var(--rv-ink);
+  background: var(--rv-glass-fill-strong);
+  -webkit-backdrop-filter: blur(16px) saturate(180%) brightness(var(--rv-brightness));
+  backdrop-filter: blur(16px) saturate(180%) brightness(var(--rv-brightness));
+  border: 1px solid var(--rv-border);
+  box-shadow: inset 0 1px 0 var(--rv-specular), var(--rv-shadow-near);
+  max-width: 260px;
+}
+/* The hover-built capsule positions itself in the root. showCapsule() sets the
+   coordinates and flips it above the control when the viewport has no room
+   below — without that, the Reply button's capsule was drawn off-screen and
+   the control refused in silence. */
+#rv-root .rv-capsule-float {
+  position: absolute;
+  /* Above every layer that HOSTS a refused control — panel 99980, toolbar
+     99990, popover 99991, reanchor bar 99992 — and below the two that are
+     meant to cover everything: cheat sheet 99994 and scope scrim 99995.
+     Nested, this was z-index 9 inside the panel's own stacking context and
+     that was enough. Escaping to #rv-root put it in the root's layer scale,
+     where 12 buried it ~99,968 layers down: the blur composited under the
+     panel and all you saw was a faint glow. */
+  z-index: 99993;
+  width: max-content;
+  pointer-events: none;
+}
+/* severity reads on a 3px left edge, never as a filled panel */
+#rv-root .rv-capsule::before {
+  content: ''; align-self: stretch; flex: none; width: 3px;
+  border-radius: var(--rv-radius-pill); background: var(--rv-ink-faint);
+}
+#rv-root .rv-sev-down::before { background: var(--rv-dot-declined); }
+#rv-root .rv-cap-body { min-width: 0; flex: 1; }
+#rv-root .rv-cap-title { display: block; font-weight: 600; }
+#rv-root .rv-cap-sub {
+  display: block; margin-top: 2px;
+  font-size: 11.5px; line-height: 1.45; color: var(--rv-ink-soft);
+}
+
+/* ============================================================
+   Run-status strip — spinner while running, outcome after
+   ============================================================ */
+#rv-root .rv-run-strip {
+  display: flex; align-items: flex-start; gap: 9px;
+  margin: 10px 12px 0; padding: 9px 12px;
+  border-radius: var(--rv-radius-lg);
+  font-size: 12.5px; color: var(--rv-ink);
+  background: var(--rv-inset-fill);
+  border: 1px solid var(--rv-border-soft);
+  box-shadow: inset 0 1px 0 var(--rv-specular);
+}
+#rv-root .rv-run-strip.rv-hidden { display: none; }
+#rv-root .rv-run-strip.rv-failed { color: var(--rv-danger); }
+#rv-root .rv-strip-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+#rv-root .rv-strip-head { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; flex-wrap: wrap; }
+#rv-root .rv-strip-sub { font-size: 11.5px; color: var(--rv-ink-faint); }
+/* #227: "View card" sits at the RIGHT END OF THE TOP LINE, beside the outcome
+   chip (Blake, 2026-08-15, after comparing both at real panel width in
+   design/mock-chunk1-repairs.html). The first build gave it its own row; his
+   layout is better because the head row carries only fixed-width things —
+   the decision chip, the author chip, the provenance — so the link lands in
+   the same place every time. The summary sentence, the one part whose length
+   varies, has its own row beneath where wrapping costs nothing.
+   `margin-left: auto` is what pins it right; `flex: none` keeps it whole when
+   the head row wraps. Same look as the stack tray's inline unfold link. */
+#rv-root .rv-strip-viewcard {
+  margin-left: auto; flex: none;
+  font: 600 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--rv-accent, #1d4ed8); text-decoration: underline;
+}
+#rv-root .rv-strip-viewcard:hover { text-decoration: none; }
+#rv-root .rv-strip-dismiss {
+  flex: none; cursor: pointer;
+  width: 20px; height: 20px; padding: 0; line-height: 1;
+  font-size: 13px; color: var(--rv-ink-faint);
+  border: none; border-radius: var(--rv-radius-pill); background: transparent;
+}
+#rv-root .rv-strip-dismiss:hover { color: var(--rv-ink); background: var(--rv-glass-fill-strong); }
+
+/* ============================================================
+   Run-log viewer (WP6) — the trace bundle in a docked pane.
+   An OPAQUE surface on purpose: it holds dense monospace text, and the
+   accessibility rules ban glass under long-form reading content.
+   ============================================================ */
+#rv-root .rv-runlog-btn { font-size: 11px; padding: 2px 9px; margin-top: 4px; }
+#rv-root .rv-runlog-btn.rv-hidden { display: none; }
+#rv-root .rv-runlog {
+  position: fixed; z-index: 2147483646;
+  top: 16px; right: 16px; bottom: 16px;
+  width: min(680px, calc(100vw - 32px));
+  display: flex; flex-direction: column;
+  border-radius: var(--rv-radius-xl);
+  background: var(--rv-surface-opaque);
+  color: var(--rv-ink);
+  border: 1px solid var(--rv-border-soft);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+#rv-root .rv-runlog-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--rv-border-soft);
+}
+#rv-root .rv-runlog-title { flex: 1; font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+#rv-root .rv-runlog-body { flex: 1; overflow-y: auto; padding: 10px 14px; }
+#rv-root .rv-runlog-loading { color: var(--rv-ink-faint); font-size: 12.5px; padding: 6px 0; }
+#rv-root .rv-runlog-error {
+  color: var(--rv-danger); font-weight: 600; font-size: 12.5px;
+  padding: 8px 10px; margin-bottom: 8px;
+  border: 1px solid var(--rv-danger); border-radius: var(--rv-radius-lg);
+  overflow-wrap: anywhere;
+}
+/* run-log explainer + pipeline grouping (WP12) */
+#rv-root .rv-runlog-explain {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin-bottom: 12px; padding: 8px 10px;
+  font-size: 11.5px; line-height: 1.45; color: var(--rv-ink-soft);
+  background: var(--rv-inset-fill);
+  border: 1px solid var(--rv-border-soft); border-radius: var(--rv-radius-lg);
+}
+#rv-root .rv-runlog-explain-icon { flex: none; opacity: 0.7; }
+#rv-root .rv-runlog-explain-text { flex: 1; min-width: 0; }
+#rv-root .rv-runlog-group { margin-bottom: 12px; }
+#rv-root .rv-runlog-group-title {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--rv-ink-faint); margin: 0 2px 5px;
+}
+#rv-root .rv-runlog-file-icon { margin-right: 6px; }
+#rv-root .rv-runlog-file-name { overflow-wrap: anywhere; }
+#rv-root .rv-runlog-file { margin-bottom: 8px; }
+#rv-root .rv-runlog-file > summary {
+  cursor: pointer; font-size: 12px; font-weight: 600; color: var(--rv-ink);
+  padding: 4px 2px;
+}
+#rv-root .rv-runlog-pre {
+  margin: 4px 0 0; padding: 8px 10px;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--rv-inset-fill);
+  border: 1px solid var(--rv-border-soft);
+  border-radius: var(--rv-radius-sm);
+  max-height: 45vh; overflow-y: auto;
+}
+
+#rv-root .rv-spinner {
+  flex: none;
+  width: 12px; height: 12px; margin-top: 2px;
+  border-radius: var(--rv-radius-pill);
+  border: 2px solid var(--rv-border-soft);
+  border-top-color: var(--rv-amber-solid);
+  animation: rv-spin 0.8s linear infinite;
+}
+@keyframes rv-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ============================================================
+   The card list and its lifecycle sections. The CARD itself — its four zones
+   and the gap rule they obey — is the next block down.
+   ============================================================ */
+#rv-root .rv-cards { flex: 1; overflow-y: auto; padding: 12px; }
+/* the card list holds focus so ↑/↓ can bite (#149); ring it on keyboard focus */
+#rv-root .rv-cards:focus { outline: none; }
+#rv-root .rv-cards:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--rv-amber-solid); }
+
+/* Lifecycle sections (WP9): Open / Recently actioned (subdivided) / Resolved.
+   A collapsible header sits over a body of cards; the body hides when the
+   header toggles rv-collapsed. Sub-section headers are smaller and indented. */
+#rv-root .rv-section { margin-bottom: 10px; }
+#rv-root .rv-section-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 2px 6px; cursor: pointer; user-select: none;
+}
+#rv-root .rv-section-title {
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--rv-ink-soft);
+}
+#rv-root .rv-section-count {
+  font-size: 10.5px; font-weight: 600; color: var(--rv-ink-faint);
+  background: var(--rv-inset-fill); border-radius: var(--rv-radius-pill); padding: 1px 7px;
+}
+#rv-root .rv-section-head::after {
+  content: "▾"; margin-left: auto; font-size: 10px; color: var(--rv-ink-faint);
+}
+#rv-root .rv-section.rv-collapsed > .rv-section-head::after,
+#rv-root .rv-subsection.rv-collapsed > .rv-section-head::after { content: "▸"; }
+#rv-root .rv-section-actioned .rv-section-body { padding-left: 2px; }
+/* the one section whose contents are not safe on disk (#202) */
+#rv-root .rv-section-attention .rv-section-title { color: var(--rv-dot-declined); }
+#rv-root .rv-subsection { margin: 0 0 6px; }
+#rv-root .rv-subsection > .rv-section-head { padding: 2px 2px 4px; }
+#rv-root .rv-subsection .rv-section-title { font-size: 10px; letter-spacing: 0.05em; opacity: 0.85; }
+/* Accent for the AI-edits toggle + AI assignee chip (#96). Not in the glass
+   token set; defined here, dark when the media is dark and not force-light, or
+   when dark is forced — mirroring glass.css's theme-forcing pattern. */
+#rv-root { --rv-accent: #2f6fd0; --rv-accent-bd: rgba(47, 111, 208, 0.40); }
+@media (prefers-color-scheme: dark) {
+  #rv-root:not(.rv-theme-light) { --rv-accent: #5b9df0; --rv-accent-bd: rgba(91, 157, 240, 0.45); }
+}
+#rv-root.rv-theme-dark { --rv-accent: #5b9df0; --rv-accent-bd: rgba(91, 157, 240, 0.45); }
+
+/* Actor hues for holds (#191, decision 22). Values from
+   design/phase10-mocks.html. Deliberately OFF the status hues: "somebody holds
+   this" is not a status, and borrowing amber or green would put a lease in
+   conversation with the run outcome it has nothing to do with. Same
+   theme-forcing pattern as --rv-accent above. */
+#rv-root {
+  --rv-hold-agent: #178a9c; --rv-hold-agent-bg: rgba(23, 138, 156, 0.14);
+  --rv-hold-human: #6c4fd0; --rv-hold-human-bg: rgba(108, 79, 208, 0.13);
+}
+@media (prefers-color-scheme: dark) {
+  #rv-root:not(.rv-theme-light) {
+    --rv-hold-agent: #3ec6da; --rv-hold-agent-bg: rgba(62, 198, 218, 0.14);
+    --rv-hold-human: #a58bff; --rv-hold-human-bg: rgba(165, 139, 255, 0.14);
+  }
+}
+#rv-root.rv-theme-dark {
+  --rv-hold-agent: #3ec6da; --rv-hold-agent-bg: rgba(62, 198, 218, 0.14);
+  --rv-hold-human: #a58bff; --rv-hold-human-bg: rgba(165, 139, 255, 0.14);
+}
+
+/* ============================================================
+   The card — FOUR ZONES, ONE GAP VOCABULARY (Phase 10, #200)
+
+   The old sheet was not badly tuned, it was UNOWNED: .rv-reply spaced with
+   margin-top, .rv-outcome and .rv-orphan-tag with margin-bottom, .rv-reanchor
+   with a third number and .rv-actions with nothing at all. Every gap was
+   therefore the SUM of two elements' opinions, and the sums that fell out were
+   0, 3, 7, 8, 9, 11 and 16px for relationships that all mean the same thing.
+   The worst — 0 — put the decision block flush against the last reply.
+
+   THE RULE. One direction, three values, one owner:
+     - every child of a card sets margin-top and NEVER margin-bottom;
+       the card's bottom padding is the only bottom space;
+     -  4px inside a unit (a "who · when" line and the text it belongs to);
+     -  8px between units in a zone (entry to entry, action row to composer);
+     - 14px between zones — and 14 appears EXACTLY THREE TIMES:
+         head → ask, ask → history, history → now,
+       the third of which carries the card's only hairline.
+   If a new element seems to need a fourth value, it is in the wrong zone.
+
+   Radii follow the token sheet and nothing else: card --rv-radius-lg, boxes
+   inside it --rv-radius-sm, chips and switches --rv-radius-pill.
+
+   Cards are FLAT translucent fills — never a backdrop-filter (glass-on-glass
+   is banned; only toolbar/panel/popover carry blur).
+   ============================================================ */
+#rv-root .rv-card {
+  position: relative;
+  background: var(--rv-inset-fill);
+  border: 1px solid var(--rv-border-soft);
+  border-radius: var(--rv-radius-lg);
+  padding: 9px 12px 10px 15px;
+  box-shadow: inset 0 1px 0 var(--rv-specular);
+  transition: background 120ms ease;
+  cursor: pointer; overflow: hidden;
+}
+/* card-to-card spacing obeys the same direction as everything inside one */
+#rv-root .rv-card + .rv-card { margin-top: 8px; }
+/* the status RAIL on the left edge: a stack is scannable without reading it */
+#rv-root .rv-card::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--rv-rail, var(--rv-dot-open));
+}
+#rv-root .rv-card-open::before      { background: var(--rv-dot-open); }
+#rv-root .rv-card-addressed::before { background: var(--rv-dot-addressed); }
+#rv-root .rv-card-declined::before  { background: var(--rv-dot-declined); }
+#rv-root .rv-card-deferred::before  { background: var(--rv-dot-deferred); }
+#rv-root .rv-card-failed::before    { background: var(--rv-dot-failed); }
+#rv-root .rv-card-resolved::before  { background: var(--rv-dot-resolved); }
+/* An AGENT-written comment breaks the rail into dashes (#201) — a third,
+   non-colour channel for authorship that survives the greyscale test and
+   repeats the fact down the card's full height. */
+#rv-root .rv-card-byagent::before {
+  background: repeating-linear-gradient(to bottom,
+    var(--rv-agent-ink) 0 5px, transparent 5px 9px);
+}
+#rv-root .rv-card:hover { background: var(--rv-glass-fill-strong); }
+#rv-root .rv-card.rv-expanded { background: var(--rv-glass-fill-strong); }
+/* human-resolved only — addressed/declined/deferred stay fully saturated */
+#rv-root .rv-card.rv-resolved { opacity: 0.72; }
+#rv-root .rv-card.rv-orphaned .rv-card-quote { opacity: 0.6; }
+
+/* ---- ZONE 1: head ----
+   ONE control row, then the quote. The row has a reading order and it does not
+   vary: who on the left, state and controls on the right, nothing in between.
+   Both halves are filled — the old row was a 22px band with a chip stranded at
+   one end, and naming the author is what fills it (#201).
+
+   The row is 22px and centred on ITSELF, with the quote below rather than
+   inside it. That is #197 fixed by construction: the AI/note chip used to be
+   align-self:center inside a flex-start row whose height came from the quote,
+   so it could not drift while the quote was one nowrap line and could not
+   help drifting once the card expanded and the quote wrapped. */
+#rv-root .rv-card-controls {
+  display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 22px;
+}
+
+/* the identity slot (#201). Never empty, and it says only what the system
+   knows: `user`, or a session's own name. No display name, no initials and no
+   picture — there is no identity service to supply them, and a letter in a
+   disc would imply one. The 18px box is drawn anyway, so the day a real name
+   and avatar arrive they are a DATA change and not a re-layout. */
+#rv-root .rv-by {
+  flex: 0 1 auto; min-width: 0;
+  display: inline-flex; align-items: center; gap: 6px; height: 22px;
+}
+#rv-root .rv-av {
+  flex: none; display: grid; place-items: center; width: 18px; height: 18px;
+  border-radius: var(--rv-radius-pill);
+  background: var(--rv-inset-fill); color: var(--rv-ink-faint);
+  border: 1px solid var(--rv-border-soft);
+}
+/* a person gets a round dot, never a letter; a session gets an angular mark.
+   Two shapes, so authorship reads without colour. */
+#rv-root .rv-av-anon::after {
+  content: ''; width: 7px; height: 7px; border-radius: var(--rv-radius-pill);
+  background: currentColor; opacity: 0.55;
+}
+#rv-root .rv-by-agent .rv-av {
+  background: var(--rv-agent-bg); color: var(--rv-agent-ink); border-color: transparent;
+}
+#rv-root .rv-by-agent .rv-av::after {
+  content: ''; width: 6px; height: 6px; background: currentColor; transform: rotate(45deg);
+}
+#rv-root .rv-byname {
+  min-width: 0; font-size: 10.5px; font-weight: 600; color: var(--rv-ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#rv-root .rv-by-agent .rv-byname { color: var(--rv-agent-ink); }
+/* the citable handle (#203). Rides in the slot the design drew for
+   "name · short mono token", so a card gains a name you can say out loud
+   without the head row gaining a line. */
+#rv-root .rv-byref {
+  margin-left: 5px;
+  font: 500 9.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--rv-ink-faint); opacity: 0.9;
+}
+#rv-root .rv-byref::before { content: '\00b7'; margin-right: 5px; }
+
+/* Audience chip (#152): FILLED in two hues, always shown, same height as the
+   approve tick. It IS the control — a button that flips AI <-> note — and
+   since the "Include in AI edits" setting row is gone it is the only one. */
+#rv-root .rv-mini {
+  flex: none;
+  display: inline-flex; align-items: center; height: 22px; padding: 0 8px;
+  font-family: inherit; font-size: 10px; font-weight: 600; white-space: nowrap;
+  border-radius: var(--rv-radius-sm); border: 1px solid transparent;
+}
+#rv-root .rv-mini-ai    { background: var(--rv-ai-bg); color: var(--rv-ai-ink); }
+#rv-root .rv-mini-note  { background: var(--rv-note-bg); color: var(--rv-note-ink); }
+/* the face status (#201). State lives with the controls, not at the head of
+   the row — who is the only thing on the left. */
+#rv-root .rv-mini-st { background: var(--rv-inset-fill); color: var(--rv-ink-soft); }
+#rv-root .rv-mini-st-addressed { background: var(--rv-chip-good-bg); color: var(--rv-chip-good-ink); }
+#rv-root .rv-mini-st-declined  { background: var(--rv-chip-bad-bg); color: var(--rv-chip-bad-ink); }
+#rv-root .rv-mini-st-deferred  { background: var(--rv-chip-defer-bg); color: var(--rv-chip-defer-ink); }
+#rv-root .rv-mini-st-failed    { background: var(--rv-chip-bad-bg); color: var(--rv-chip-bad-ink); }
+#rv-root .rv-mini-st-resolved  { background: var(--rv-chip-done-bg); color: var(--rv-chip-done-ink); }
+#rv-root .rv-mini-st-reopened  { background: var(--rv-chip-open-bg); color: var(--rv-chip-open-ink); }
+/* #216: a buffered card's orphan chip. Same "bad" hue as a declined/failed
+   status — the commented text is gone, which is the same class of news. */
+#rv-root .rv-mini-orphan { background: var(--rv-chip-bad-bg); color: var(--rv-chip-bad-ink); }
+#rv-root button.rv-mini { cursor: pointer; }
+#rv-root button.rv-mini:hover,
+#rv-root button.rv-mini:focus-visible { border-color: currentColor; outline: none; }
+
+/* the thread count (#201): appears only when something HAS happened, so every
+   mark on a card face means something. */
+#rv-root .rv-thread {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; padding: 0 6px;
+  font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  border-radius: var(--rv-radius-sm);
+  background: var(--rv-inset-fill); color: var(--rv-ink-soft);
+  border: 1px solid var(--rv-border-soft);
+}
+
+/* approve = resolve; heavy-miter tick from two straight strokes, squared to
+   match the toolbar's angular language. The tick only ever SETTLES (#198) —
+   there is no toggle-back — and it is not rendered once a card is resolved. */
+#rv-root .rv-approve {
+  flex: none; width: 22px; height: 22px; border-radius: var(--rv-radius-sm);
+  border: 1px solid var(--rv-border); background: var(--rv-glass-fill);
+  cursor: pointer; padding: 0; position: relative;
+  display: grid; place-items: center;
+}
+#rv-root .rv-approve::after {
+  content: ''; width: 5px; height: 10px; margin-top: -2px;
+  border: solid var(--rv-ink-faint); border-width: 0 3px 3px 0; transform: rotate(45deg);
+}
+#rv-root .rv-approve:hover { border-color: var(--rv-dot-addressed); }
+#rv-root .rv-approve:hover::after { border-color: var(--rv-dot-addressed); }
+
+/* the anchor quote — 4px under the controls, because the two are one unit */
+#rv-root .rv-card-quote {
+  margin-top: 4px; padding-left: 8px;
+  border-left: 3px solid var(--rv-amber);
+  font-size: 11px; color: var(--rv-ink-soft); font-style: italic;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#rv-root .rv-card.rv-expanded .rv-card-quote {
+  white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere;
+}
+
+/* ---- ZONE 2: ask ---- 14px, gap one of three */
+#rv-root .rv-card-body {
+  margin-top: 14px; font-size: 12.5px; color: var(--rv-ink); line-height: 1.45;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#rv-root .rv-card.rv-expanded .rv-card-body {
+  white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere;
+}
+/* #265: both body faces are in the DOM; the class pair picks one, so the
+   in-place expand/collapse toggle needs no rebuild. */
+#rv-root .rv-card.rv-expanded .rv-body-line { display: none; }
+#rv-root .rv-card.rv-collapsed .rv-body-full { display: none; }
+/* collapsed only: the last thing anybody said, one clamped line (#201) */
+#rv-root .rv-card-last {
+  margin-top: 8px; font-size: 11.5px; line-height: 1.4; color: var(--rv-ink-soft);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#rv-root .rv-card.rv-expanded .rv-card-last { display: none; }
+
+/* ---- #265: the expanded half animates ----
+   Zones 3+4 live in a grid well whose row transitions 0fr -> 1fr — height-to-
+   auto with no max-height guesswork (spec: design/mock-card-transitions.html;
+   280ms decided 2026-08-12, the token below is the one knob). Opacity rides
+   slightly delayed so content fades in as room appears and fades out ahead of
+   the room vanishing. The card-click path flips classes on the existing card;
+   render() rebuilds land in the final state with no motion — correct for
+   polls and data changes. */
+#rv-root { --rv-expand-dur: 280ms; }
+#rv-root .rv-card-more {
+  display: grid; grid-template-rows: 0fr;
+  transition: grid-template-rows var(--rv-expand-dur) ease;
+}
+#rv-root .rv-card-more-inner {
+  overflow: hidden; min-height: 0; opacity: 0;
+  transition: opacity calc(var(--rv-expand-dur) * 0.7) ease;
+}
+#rv-root .rv-card.rv-expanded .rv-card-more { grid-template-rows: 1fr; }
+#rv-root .rv-card.rv-expanded .rv-card-more-inner {
+  opacity: 1; transition-delay: calc(var(--rv-expand-dur) * 0.25);
+}
+@media (prefers-reduced-motion: reduce) {
+  #rv-root .rv-card-more,
+  #rv-root .rv-card-more-inner { transition: none; }
+}
+/* green names an agent here as everywhere else, so the user variant is neutral */
+#rv-root .rv-lastwho { font-weight: 600; color: var(--rv-agent-ink); }
+#rv-root .rv-lastwho-user { color: var(--rv-ink-soft); }
+
+/* ---- ZONE 3: history ---- 14px, gap two of three
+   Every reply, every decision and every flip, oldest first, interleaved by
+   timestamp (#199). Read the "who · when" stamps down the card: if they
+   ascend, the card is ordered correctly. */
+#rv-root .rv-hist { margin-top: 14px; }
+#rv-root .rv-entry { margin-top: 8px; }
+#rv-root .rv-entry:first-child { margin-top: 0; }
+/* BOXES hold words somebody wrote … */
+#rv-root .rv-entry-msg {
+  padding: 6px 9px; border-radius: var(--rv-radius-sm);
+  background: var(--rv-inset-fill); border: 1px solid var(--rv-border-soft);
+  font-size: 12.5px; color: var(--rv-ink); overflow-wrap: anywhere;
+}
+/* a decision is an entry in the thread at the moment it happened, not a
+   footer on the card; the coloured edge says which way it went */
+#rv-root .rv-entry-decision { border-left-width: 3px; border-left-style: solid; }
+#rv-root .rv-d-addressed { border-left-color: var(--rv-dot-addressed); }
+#rv-root .rv-d-declined  { border-left-color: var(--rv-dot-declined); }
+#rv-root .rv-d-deferred  { border-left-color: var(--rv-dot-deferred); }
+#rv-root .rv-d-failed    { border-left-color: var(--rv-dot-failed); }
+#rv-root .rv-entry-undone { opacity: 0.6; }
+/* … and BARE HAIRLINE ROWS hold things that merely happened */
+#rv-root .rv-entry-ev {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 11px; color: var(--rv-ink-soft);
+}
+#rv-root .rv-entry-ev::before {
+  content: ''; flex: none; width: 6px; height: 6px;
+  border-radius: var(--rv-radius-pill); background: var(--rv-ink-faint);
+}
+#rv-root .rv-ev-reopened::before { background: var(--rv-amber-solid); }
+#rv-root .rv-who {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 10px; color: var(--rv-ink-faint);
+}
+#rv-root .rv-who-user  { font-weight: 600; color: var(--rv-ink-soft); }
+#rv-root .rv-who-agent { font-weight: 600; color: var(--rv-agent-ink); }
+#rv-root .rv-when {
+  margin-left: auto; flex: none;
+  font: 9.5px ui-monospace, SFMono-Regular, Menlo, monospace; opacity: 0.85;
+}
+#rv-root .rv-text { margin-top: 4px; color: var(--rv-ink); line-height: 1.45; }
+/* the run id is the link into the trace (there is no separate Run log button).
+   #236 adds an optional scope-gate chip beside it — WRAPS (never scrolls):
+   the card is ~312px inside the 336px panel (#rv-root .rv-panel above) and
+   this row is monospace, so run id + chip does not reliably fit one line. */
+#rv-root .rv-run {
+  margin-top: 4px; display: flex; align-items: center;
+  flex-wrap: wrap; gap: 4px 8px;
+}
+#rv-root .rv-run .rv-runlog-btn {
+  padding: 0; border: none; background: none;
+  font: 9.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--rv-ink-faint); border-bottom: 1px dotted var(--rv-border); border-radius: 0;
+  cursor: pointer;
+}
+#rv-root .rv-run .rv-runlog-btn:hover { color: var(--rv-ink); border-bottom-color: var(--rv-ink); }
+/* #236: the scope-gate outcome chip. Reuses the good/bad chip tokens
+   (rv-chip-addressed / rv-chip-declined already carry that meaning for a
+   comment's own resolution) so the colour vocabulary stays one system, under
+   distinct class names so an "allowed at a checkpoint" run is never read as
+   a comment decision. Non-uppercase and smaller than a status chip — this is
+   a footnote on the run row, not the headline of the card. */
+#rv-root .rv-run .rv-chip-gate-allowed,
+#rv-root .rv-run .rv-chip-gate-declined,
+#rv-root .rv-entry-gate .rv-chip-gate-declined {
+  text-transform: none; font-size: 9.5px; font-weight: 600;
+  letter-spacing: 0; padding: 1px 7px;
+}
+#rv-root .rv-chip-gate-allowed { background: var(--rv-chip-good-bg); color: var(--rv-chip-good-ink); }
+#rv-root .rv-chip-gate-declined { background: var(--rv-chip-bad-bg); color: var(--rv-chip-bad-ink); }
+/* #236: the declined-confirmation row — its own entry kind (never
+   rv-entry-decision / rv-d-declined, which name the AGENT declining the
+   ask — this is the AUTHOR declining a wider edit, a different event). */
+#rv-root .rv-entry-gate { border-left: 3px solid var(--rv-dot-declined); }
+#rv-root .rv-entry-gate-row {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px;
+}
+
+/* ---- ZONE 4: now ---- 14px, gap three of three, and the card's ONE hairline.
+   The present state and what you can do about it. Nothing here carries a
+   timestamp, because none of it has happened yet. */
+#rv-root .rv-now { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--rv-hairline); }
+#rv-root .rv-now > * { margin-top: 8px; }
+#rv-root .rv-now > *:first-child { margin-top: 0; }
+#rv-root .rv-orphan-tag { font-size: 11px; color: var(--rv-ink-faint); font-style: italic; }
+
+/* re-anchor an orphaned comment (#157, R3): the suggestion box (amber edge)
+   and the manual-pick prompt bar */
+#rv-root .rv-reanchor {
+  padding: 8px 10px; border-radius: var(--rv-radius-sm);
+  background: var(--rv-inset-fill); border: 1px solid var(--rv-border-soft);
+  border-left: 3px solid var(--rv-amber-solid);
+}
+#rv-root .rv-reanchor-snippet { font-size: 12.5px; font-style: italic; color: var(--rv-ink-soft); overflow-wrap: anywhere; }
+#rv-root .rv-reanchor-label { font-size: 11px; color: var(--rv-ink-faint); }
+#rv-root .rv-reanchor .rv-reanchor-snippet { margin-top: 4px; }
+#rv-root .rv-reanchor .rv-actions { margin-top: 8px; }
+/* the manual-pick prompt: a flat-glass bar above the toolbar (no backdrop
+   blur — that stays on the toolbar/panel/popover/pill chrome) */
+#rv-root .rv-reanchor-bar {
+  position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%);
+  z-index: 99992; display: inline-flex; align-items: center; gap: 9px;
+  padding: 8px 10px 8px 14px; border-radius: var(--rv-radius-pill);
+  font-size: 12.5px; color: var(--rv-ink);
+  background: var(--rv-glass-fill-strong); border: 1px solid var(--rv-border);
+  box-shadow: var(--rv-shadow-near), inset 0 1px 0 var(--rv-specular);
+}
+
+/* action row: Reply · spacer · primary (Send now / Retry / Reopen) */
+#rv-root .rv-actions-spacer { flex: 1; }
+
+/* the composer. It sits in zone 4 beside the action row that opens it, rather
+   than full-bleed at the bottom of the card, detached from the thread it
+   appends to. Its primary reads "Reply & re-open" on a settled comment (#198)
+   so the consequence is stated rather than hidden. */
+#rv-root .rv-followup-head {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--rv-ink-soft);
+}
+#rv-root .rv-followup-input {
+  margin-top: 4px; width: 100%; box-sizing: border-box; resize: vertical; min-height: 52px;
+  font-family: system-ui, -apple-system, sans-serif; font-size: 12.5px; color: var(--rv-ink);
+  padding: 7px 9px; border-radius: var(--rv-radius-sm);
+  border: 1px solid var(--rv-border); background: var(--rv-glass-fill);
+}
+#rv-root .rv-followup-input:focus-visible { outline: 2px solid var(--rv-amber-solid); outline-offset: 2px; }
+#rv-root .rv-followup-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+
+/* ---- a BUFFERED card (#202) ----
+   Written while the runner was down, living in this browser and nowhere else.
+   UNSAVED WORK MUST NEVER LOOK SAVED, so it carries three signals rather than
+   one — a dashed border, a segmented rail and a chip naming where it lives —
+   because this is the one card whose misreading loses writing. It keeps the
+   same gap vocabulary as every other card: margin-top only, 4 / 8 / 14. */
+#rv-root .rv-card.rv-buffered {
+  border-style: dashed; border-color: var(--rv-border);
+  background: none; cursor: default;
+}
+#rv-root .rv-card.rv-buffered:hover { background: none; }
+#rv-root .rv-card.rv-buffered::before {
+  background: repeating-linear-gradient(to bottom,
+    var(--rv-ink-faint) 0 4px, transparent 4px 8px);
+}
+#rv-root .rv-local-row { margin-top: 8px; }
+#rv-root .rv-local {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: var(--rv-radius-pill);
+  font-size: 10px; font-weight: 600;
+  background: var(--rv-inset-fill); color: var(--rv-ink-soft);
+  border: 1px dashed var(--rv-border);
+}
+#rv-root .rv-local::before {
+  content: ''; width: 5px; height: 5px; border-radius: var(--rv-radius-pill);
+  border: 1px solid currentColor;
+}
+/* a replay that could not land. Solid red, because the dashed "still working
+   on it" reading is now wrong: nothing further happens without the author. */
+#rv-root .rv-card.rv-failed-replay { border-style: solid; border-color: var(--rv-dot-declined); }
+#rv-root .rv-card.rv-failed-replay::before { background: var(--rv-dot-declined); }
+#rv-root .rv-failed {
+  margin-top: 8px; padding: 6px 8px; border-radius: var(--rv-radius-sm);
+  font-size: 11px; line-height: 1.45;
+  background: var(--rv-chip-bad-bg); color: var(--rv-ink);
+}
+#rv-root .rv-failed b { color: var(--rv-dot-declined); }
+/* Copy text is the floor — whatever else fails, the writing survives — so the
+   exits are always visible rather than hidden behind expanding the card. */
+#rv-root .rv-local-acts { margin-top: 8px; }
+#rv-root .rv-btn-quiet { color: var(--rv-ink-faint); border-color: transparent; background: none; }
+#rv-root .rv-btn-quiet:hover { color: var(--rv-danger); border-color: var(--rv-border-soft); }
+
+/* status chips (expanded cards + run strip): open (amber) by default */
+#rv-root .rv-chip {
+  display: inline-block;
+  font-size: 10.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 2px 9px; border-radius: var(--rv-radius-pill);
+  background: var(--rv-chip-open-bg); color: var(--rv-chip-open-ink);
+  box-shadow: inset 0 1px 0 var(--rv-specular);
+}
+#rv-root .rv-chip-addressed { background: var(--rv-chip-good-bg); color: var(--rv-chip-good-ink); }
+#rv-root .rv-chip-declined { background: var(--rv-chip-bad-bg); color: var(--rv-chip-bad-ink); }
+#rv-root .rv-chip-deferred { background: var(--rv-chip-defer-bg); color: var(--rv-chip-defer-ink); }
+#rv-root .rv-chip-resolved { background: var(--rv-chip-done-bg); color: var(--rv-chip-done-ink); }
+#rv-root .rv-chip-failed { background: var(--rv-chip-bad-bg); color: var(--rv-chip-bad-ink); }
+/* scope-confirmation chip (WP7): amber, like an open/attention state */
+#rv-root .rv-chip-confirm { background: var(--rv-chip-open-bg); color: var(--rv-chip-open-ink); }
+#rv-root .rv-run-strip.rv-confirm { border-left: 3px solid var(--rv-amber-solid); }
+#rv-root .rv-confirm-actions { display: flex; gap: 8px; margin-top: 9px; }
+
+/* ---- scope confirmation (#107): a page-locking modal + a panel lock bar ---- */
+/* The scrim carries NO backdrop-filter on purpose — it is not a chrome layer,
+   and the extension-ui guardrail keeps blur on toolbar/panel/popover only. */
+#rv-root .rv-scope-scrim {
+  position: fixed; inset: 0; z-index: 99995;
+  background: rgba(14, 18, 26, 0.46);
+  display: grid; place-items: center; padding: 24px;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+#rv-root .rv-scope-dialog {
+  width: min(30rem, 100%); max-height: 86vh; overflow-y: auto;
+  background: var(--rv-glass-fill-strong); color: var(--rv-ink);
+  border: 1px solid var(--rv-border); border-top: 3px solid var(--rv-amber-solid);
+  border-radius: var(--rv-radius-xl); box-shadow: var(--rv-shadow); padding: 15px 18px 16px;
+}
+#rv-root .rv-scope-kicker {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--rv-amber-solid);
+}
+#rv-root .rv-scope-pulse {
+  width: 7px; height: 7px; border-radius: var(--rv-radius-pill); background: var(--rv-amber-solid);
+  animation: rv-scope-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rv-scope-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+#rv-root .rv-scope-title { margin: 8px 0 0; font-size: 15.5px; font-weight: 600; line-height: 1.35; }
+#rv-root .rv-scope-body { margin: 9px 0 0; font-size: 13px; line-height: 1.55; color: var(--rv-ink-soft); }
+#rv-root .rv-scope-note { margin-top: 7px; color: var(--rv-ink); }
+/* The reach, in the document's own words (#106). A <ul> of readable phrases;
+   the monospace id list it replaced survives only as the no-`reach` fallback,
+   which is still a <div> and keeps the old treatment. */
+#rv-root ul.rv-scope-blocks {
+  margin: 9px 0 0; padding: 9px 10px 9px 26px; border-radius: var(--rv-radius-sm);
+  background: var(--rv-inset-fill); border: 1px solid var(--rv-border-soft);
+  font-size: 12.5px; line-height: 1.6; color: var(--rv-ink-soft);
+  overflow-wrap: anywhere;
+}
+#rv-root ul.rv-scope-blocks li.rv-scope-quote { font-style: italic; }
+#rv-root ul.rv-scope-blocks b { color: var(--rv-ink); font-weight: 600; font-style: normal; }
+#rv-root ul.rv-scope-blocks li.rv-scope-unknown {
+  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--rv-ink-faint);
+}
+/* The theme is not a block; separate it so it never reads as one more sentence. */
+#rv-root ul.rv-scope-blocks li.rv-scope-theme {
+  list-style: none; margin: 5px 0 0 -16px; padding-top: 5px;
+  border-top: 1px solid var(--rv-border-soft); color: var(--rv-ink); font-style: normal;
+}
+#rv-root div.rv-scope-blocks {
+  margin-top: 9px; padding: 6px 9px; border-radius: var(--rv-radius-sm);
+  background: var(--rv-glass-fill); border: 1px solid var(--rv-border-soft);
+  font: 11.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--rv-ink-faint);
+  overflow-wrap: anywhere;
+}
+#rv-root .rv-scope-actions {
+  display: flex; align-items: center; gap: 8px; margin-top: 15px;
+  padding-top: 13px; border-top: 1px solid var(--rv-border-soft);
+}
+#rv-root .rv-scope-spacer { flex: 1; }
+#rv-root .rv-scope-dismiss { color: var(--rv-ink-faint); }
+
+/* Panel lock bar: shown while a confirmation is pending, whether or not the
+   modal is dismissed. Review re-opens the modal. */
+#rv-root .rv-lock-bar {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; border-radius: var(--rv-radius-lg);
+  background: var(--rv-amber); border: 1px solid var(--rv-amber-solid);
+  font-size: 12px; color: var(--rv-ink);
+}
+#rv-root .rv-lock-dot {
+  width: 7px; height: 7px; border-radius: var(--rv-radius-pill); background: var(--rv-amber-solid); flex: none;
+  animation: rv-scope-pulse 1.4s ease-in-out infinite;
+}
+#rv-root .rv-lock-text { flex: 1; min-width: 0; }
+#rv-root .rv-lock-review { flex: none; }
+
+/* author chip (WP1): names an AGENT author on cards, replies, and the run
+   strip. Lowercase (agent ids read better un-shouted), neutral tint, and
+   width-capped so a long agentName can never break the card layout. */
+#rv-root .rv-chip-agent { background: var(--rv-chip-defer-bg); color: var(--rv-chip-defer-ink); }
+#rv-root .rv-author-chip {
+  flex: none;
+  text-transform: none; letter-spacing: 0.01em; font-weight: 600;
+  max-width: 11ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Action row: buttons, a flexible spacer, and nothing else. The inline reply
+   box that used to sit in this row is gone — replying opens the composer in
+   zone 4, which is where the card's other "what you can do now" lives. */
+#rv-root .rv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+#rv-root .rv-actions .rv-btn { flex: none; white-space: nowrap; }
+
+/* ============================================================
+   Panel footer — Auto | Light | Dark segmented theme control
+   ============================================================ */
+#rv-root .rv-panel-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--rv-hairline);
+  background: linear-gradient(to top, var(--rv-inset-fill), transparent);
+  font-size: 12px; font-weight: 500;
+  color: var(--rv-ink-faint);
+  position: relative; z-index: 1;
+}
+/* scroll-edge frost, mirroring the header band, where cards scroll under
+   the footer — flat gradient only, never a second backdrop-filter */
+#rv-root .rv-panel-footer::before {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 100%; height: 14px;
+  background: linear-gradient(to top, var(--rv-glass-fill), transparent);
+  pointer-events: none;
+}
+/* build tag — which unpacked copy is injected; deliberately quiet. Its own
+   full-width row under the theme control: the label has to stay readable in
+   full (that is its whole job), and it will not fit beside the segmented
+   control at any panel width we support. */
+#rv-root .rv-build-tag {
+  flex: 0 0 100%;
+  text-align: right;
+  margin-top: -2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px; font-weight: 400; line-height: 1.2;
+  color: var(--rv-ink-faint);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+#rv-root .rv-seg {
+  display: inline-flex; gap: 2px;
+  padding: 2px;
+  border-radius: var(--rv-radius-pill);
+  background: var(--rv-inset-fill);
+  border: 1px solid var(--rv-border-soft);
+  box-shadow: inset 0 1px 3px rgba(20, 24, 40, 0.08);
+}
+#rv-root .rv-seg-btn {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--rv-ink-soft);
+  padding: 3px 10px;
+  border-radius: var(--rv-radius-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  user-select: none; -webkit-user-select: none;
+  transition: background 120ms ease, color 120ms ease;
+}
+#rv-root .rv-seg-btn:hover { color: var(--rv-ink); }
+#rv-root .rv-seg-btn.rv-seg-active {
+  background: var(--rv-glass-fill-strong);
+  color: var(--rv-ink);
+  border-color: var(--rv-border-soft);
+  box-shadow: inset 0 1px 0 var(--rv-specular), 0 1px 3px rgba(20, 24, 40, 0.12);
+}
+
+/* ============================================================
+   Comment composer (Phase 4, #151) — below the selection, never over the
+   text. Quote · field · one audience switch (AI/Note) · Cancel/Comment, plus
+   a LEFT RAIL that carries the audience in the cards' own language (blue for
+   the agent, grey for a note). Nothing else — no label chips, no key hints.
+   ============================================================ */
+#rv-root .rv-popover {
+  position: absolute; z-index: 99991;
+  width: 312px; box-sizing: border-box;
+  padding: 11px 12px 12px 14px; overflow: hidden;
+  font-family: system-ui, -apple-system, sans-serif; font-size: 13px;
+  color: var(--rv-ink);
+  background: var(--rv-glass-fill-strong);
+  -webkit-backdrop-filter: blur(24px) saturate(180%) brightness(var(--rv-brightness));
+  backdrop-filter: blur(24px) saturate(180%) brightness(var(--rv-brightness));
+  border: 1px solid var(--rv-border);
+  border-radius: var(--rv-radius-xl);
+  box-shadow: inset 0 1px 0 var(--rv-specular), var(--rv-shadow-near);
+}
+/* the audience rail — grey for a note, blue when it goes to the agent */
+#rv-root .rv-popover::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: rgba(120, 128, 148, 0.45); transition: background 140ms ease;
+}
+#rv-root .rv-popover.rv-for-ai::before { background: var(--rv-accent); }
+#rv-root .rv-composer-quote {
+  font: italic 11.5px/1.45 Charter, Georgia, serif; color: var(--rv-ink-faint);
+  border-left: 2px solid var(--rv-hairline); padding-left: 8px; margin-bottom: 9px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+#rv-root .rv-composer-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+/* the audience switch (AI / Note): reuses the mode switch's track/knob, blue
+   when on, with a bare one-word label */
+#rv-root .rv-aud-sw { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-size: 11.5px; color: var(--rv-ink-soft); }
+#rv-root .rv-aud-lbl { white-space: nowrap; }
+#rv-root .rv-aud-sw[aria-pressed="true"] .rv-sw-track { background: var(--rv-accent); }
+#rv-root .rv-aud-sw:focus-visible { outline: none; }
+#rv-root .rv-aud-sw:focus-visible .rv-sw-track { outline: 2px solid var(--rv-amber-solid); outline-offset: 2px; }
+#rv-root .rv-popover textarea {
+  width: 100%; box-sizing: border-box;
+  min-height: 60px; resize: vertical;
+  padding: 8px 10px;
+  font: inherit; color: var(--rv-ink);
+  background: var(--rv-inset-fill);
+  border: 1px solid var(--rv-border-soft);
+  border-radius: var(--rv-radius-sm);
+  box-shadow: var(--rv-input-shadow);
+}
+#rv-root .rv-popover textarea::placeholder { color: var(--rv-ink-faint); }
+#rv-root .rv-popover-note { min-height: 0; margin-top: 4px; font-size: 11.5px; color: var(--rv-danger); }
+#rv-root .rv-popover-note:empty { display: none; }
+/* The composer's lease line (#189). It states the RELEASE CONDITION — a fact
+   about the control — and never a deadline. Decision 7 puts no countdown on a
+   human-held block, ever: no expiry warning, no ring draining in the corner of
+   your eye. Hold the block as long as you like. */
+#rv-root .rv-composer-lease {
+  margin-top: 7px; font-size: 11px; font-weight: 600; line-height: 1.4;
+  color: var(--rv-hold-human);
+}
+#rv-root .rv-composer-lease.rv-hidden { display: none; }
+#rv-root .rv-popover.rv-composer-held { border-color: var(--rv-hold-human); }
+#rv-root .rv-popover-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+
+/* ============================================================
+   Selection pill (Phase 4, #150) — a small icons-only capsule BELOW the
+   selection (never over the line you just read). Copy · Comment · Edit;
+   hovering an icon drops a tooltip naming the action + key (Google Docs).
+   A floating glass capsule like the toolbar/popover — it carries the same
+   backdrop-filter, and extension-ui.test.mjs allows it as a chrome layer.
+   ============================================================ */
+#rv-root .rv-selpill {
+  position: absolute; z-index: 99985;
+  display: flex; align-items: center; gap: 2px; padding: 4px;
+  border-radius: var(--rv-radius-pill);
+  background: var(--rv-glass-fill-strong); border: 1px solid var(--rv-border);
+  -webkit-backdrop-filter: blur(16px) saturate(180%) brightness(var(--rv-brightness));
+  backdrop-filter: blur(16px) saturate(180%) brightness(var(--rv-brightness));
+  box-shadow: var(--rv-shadow-near), inset 0 1px 0 var(--rv-specular);
+}
+#rv-root .rv-selpill-btn {
+  display: grid; place-items: center; width: 30px; height: 30px;
+  border: 0; background: none; color: var(--rv-ink);
+  border-radius: var(--rv-radius-pill); cursor: pointer; padding: 0;
+}
+#rv-root .rv-selpill-btn:hover { background: var(--rv-inset-fill); }
+#rv-root .rv-selpill-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--rv-amber-solid); }
+/* the hover explainer: a small dark box UNDER the pill, mirroring Google Docs */
+#rv-root .rv-selpill-tip {
+  position: absolute; z-index: 99987;
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 9px; border-radius: var(--rv-radius-sm);
+  font-size: 11.5px; white-space: nowrap;
+  background: var(--rv-primary-fill); color: var(--rv-primary-ink);
+  box-shadow: var(--rv-shadow-near); pointer-events: none;
+}
+#rv-root .rv-selpill-tip kbd {
+  font: 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 2px 5px; border-radius: var(--rv-radius-min);
+  background: rgba(255, 255, 255, 0.20); color: inherit;
+}
+
+/* ============================================================
+   Anchor flash — an overlay box over the located text; overlay.js adds
+   rv-flash-out (a short hold, then this fade) and removes the box at
+   FLASH_MS, clearing any previous flash first. The document's own DOM
+   and styles are never touched.
+   ============================================================ */
+#rv-root .rv-flash {
+  position: absolute; z-index: 99970;
+  pointer-events: none;
+  border-radius: var(--rv-radius-min);
+  background: var(--rv-amber);
+  box-shadow: 0 0 0 2px var(--rv-amber);
+  opacity: 1;
+  transition: opacity 0.9s ease 0.3s;
+}
+#rv-root .rv-flash.rv-flash-out { opacity: 0; }
+
+/* Pending-anchor highlight — while the comment popover is open the native
+   selection collapses, so these boxes (one per range client rect) keep the
+   commented text visibly marked until the popover closes. Same overlay
+   technique as .rv-flash: positioned in #rv-root, document DOM untouched. */
+#rv-root .rv-pending-hl {
+  position: absolute; z-index: 99969;
+  pointer-events: none;
+  border-radius: var(--rv-radius-min);
+  background: var(--rv-amber);
+}
+
+/* Persistent anchor highlight — a SUBTLE tint held over the anchor for as
+   long as its card is expanded (WP2). Fainter than the flash/pending boxes
+   so it marks the text without obscuring it; repositioned on scroll/resize
+   by overlay.js. Positioned in #rv-root; the document DOM is never touched. */
+#rv-root .rv-anchor-hl {
+  position: absolute; z-index: 99968;
+  pointer-events: none;
+  border-radius: var(--rv-radius-min);
+  background: color-mix(in srgb, var(--rv-amber-solid) 22%, transparent);
+}
+/* #257, the second layer: the EXACT quoted text, deeper than the ambient
+   block tint it sits over. A tint, not an underline — underlines collide
+   with links and genuine underlines on arbitrary documents. */
+#rv-root .rv-anchor-exact {
+  background: color-mix(in srgb, var(--rv-amber-solid) 42%, transparent);
+}
+
+/* ============================================================
+   Held blocks (#189 · #191) — positioned boxes in #rv-root over the block's
+   client rects, exactly like the anchor highlight above. The document DOM is
+   never mutated inside a block.
+
+   These sit on the CONTENT layer, where the glass material is forbidden per
+   HIG: no backdrop-filter, no glass fill, solid edges and flat tints only.
+
+   TWO HUES, AND NEITHER MAY BE LOAD-BEARING. Teal is an agent-held block and
+   violet a human-held one (decision 22), but teal and violet are a common
+   confusion pair — around one man in twelve cannot reliably tell them apart at
+   the low saturation quiet chrome uses, and this IS quiet chrome. So the RAIL
+   PATTERN carries the actor (solid = agent, segmented = human), the tag's
+   border repeats it (solid = agent, DASHED = human), and both always name the
+   holder in words. Three channels; the mock proves the greyscale case.
+   ============================================================ */
+#rv-root .rv-lease-rail {
+  position: absolute; z-index: 99967;
+  pointer-events: none;
+  width: 3px; border-radius: var(--rv-radius-min);
+}
+/* solid = the agent. It is the case that changes what you do next, so it gets
+   the continuous edge. */
+#rv-root .rv-lease-rail.rv-lease-agent { background: var(--rv-hold-agent); }
+/* segmented = a human. Reads as provisional, which a human hold is — it ends
+   the moment you save or cancel. */
+#rv-root .rv-lease-rail.rv-lease-human {
+  background: repeating-linear-gradient(to bottom,
+    var(--rv-hold-human) 0 6px, transparent 6px 11px);
+}
+/* The veil and the tag are an ON-APPROACH state. The rail alone is what you see
+   99% of the time: a label hung permanently above a held paragraph would
+   overlap the block above it and would charge every held block for a fact you
+   only need at the moment you try to type. */
+#rv-root .rv-lease-veil {
+  position: absolute; z-index: 99966;
+  pointer-events: none;
+  border-radius: var(--rv-radius-min);
+}
+#rv-root .rv-lease-veil.rv-lease-agent { background: var(--rv-hold-agent-bg); }
+#rv-root .rv-lease-veil.rv-lease-human { background: var(--rv-hold-human-bg); }
+#rv-root .rv-lease-tag {
+  position: absolute; z-index: 99968;
+  pointer-events: none; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 600; padding: 3px 8px;
+  border-radius: var(--rv-radius-pill);
+  border: 1px solid currentColor;
+  background: var(--rv-glass-fill-strong);
+}
+#rv-root .rv-lease-tag.rv-lease-agent { color: var(--rv-hold-agent); }
+/* dashed border = human, the non-colour half of the cue */
+#rv-root .rv-lease-tag.rv-lease-human { color: var(--rv-hold-human); border-style: dashed; }
+
+/* #112: direct-edit pencil. Floats at the top-right of any instrumented block
+   on hover in review mode (document coords, absolute in #rv-root). Clicking it
+   makes the block editable in place. */
+/* #223: the gutter rail — comment over edit at the hovered block's row, in
+   the gutter's inner lane. The rail is the positioned thing (overlay.js
+   places it against the gutter column, document coords); the buttons are
+   plain grid children. The corner pencil's floating placement is GONE. */
+#rv-root .rv-gt-rail {
+  position: absolute; z-index: 99981;
+  display: grid; gap: 3px;
+}
+#rv-root .rv-gt-add {
+  position: relative;
+  width: 22px; height: 22px; border-radius: var(--rv-radius-pill); padding: 0; cursor: pointer;
+  background: var(--rv-glass-fill-strong); border: 1px solid var(--rv-border);
+  box-shadow: var(--rv-shadow-near);
+  display: grid; place-items: center;
+  font-size: 13px; color: var(--rv-ink-soft);
+}
+#rv-root .rv-gt-add::before { content: ''; position: absolute; inset: -6px; border-radius: inherit; }
+#rv-root .rv-gt-add:hover { color: var(--rv-ink); border-color: var(--rv-amber-solid); }
+#rv-root .rv-edit-pencil {
+  position: relative; /* anchors its capsule; the RAIL carries the placement */
+  width: 22px; height: 22px; border-radius: var(--rv-radius-pill); padding: 0; cursor: pointer;
+  background: var(--rv-glass-fill-strong); border: 1px solid var(--rv-border);
+  box-shadow: var(--rv-shadow-near);
+  display: grid; place-items: center;
+}
+/* #131: the hit area is larger than the glyph. An invisible inset ring means a
+   near-miss still lands, without growing the button visually. */
+#rv-root .rv-edit-pencil::before { content: ''; position: absolute; inset: -8px; border-radius: inherit; }
+#rv-root .rv-edit-pencil::after { content: '\270E'; font-size: 12px; color: var(--rv-ink-soft); line-height: 1; }
+#rv-root .rv-edit-pencil:hover { border-color: var(--rv-amber-solid); }
+#rv-root .rv-edit-pencil:hover::after { color: var(--rv-ink); }
+/* Offline (#196): the affordance STAYS and changes state. Removing the pencil
+   would teach nothing; a refused one teaches the rule and, on hover, carries
+   the reason plus the alternative that still works. */
+#rv-root .rv-edit-pencil.rv-pencil-off {
+  cursor: default; border-style: dashed; border-color: var(--rv-dot-declined); opacity: 0.85;
+}
+#rv-root .rv-edit-pencil.rv-pencil-off::after { color: var(--rv-dot-declined); }
+#rv-root .rv-edit-pencil.rv-pencil-off:hover { border-color: var(--rv-dot-declined); }
+/* Held by the agent (#191). Same argument as offline, different cause: the
+   gated thing should be the thing that LOOKS gated, so the pencil stays and
+   changes state. Teal and dashed — dashed because the hold is temporary, not
+   because it failed. No padlock: a lock glyph would say "you may not touch
+   this", and that is false. Reading, commenting and replying all still work. */
+#rv-root .rv-edit-pencil.rv-pencil-held {
+  cursor: default; border-style: dashed; border-color: var(--rv-hold-agent); opacity: 0.9;
+}
+#rv-root .rv-edit-pencil.rv-pencil-held::after { color: var(--rv-hold-agent); }
+#rv-root .rv-edit-pencil.rv-pencil-held:hover { border-color: var(--rv-hold-agent); }
+#rv-root .rv-sev-held::before { background: var(--rv-hold-agent); }
+/* the pencil's own capsule hangs below it and must escape the 24px button */
+#rv-root .rv-edit-pencil > .rv-why { top: calc(100% + 10px); right: -4px; }
+#rv-root .rv-edit-pencil:not(.rv-pencil-off):not(.rv-pencil-held) > .rv-why { display: none; }
+/* one capsule per refusal — never both stacked */
+#rv-root .rv-edit-pencil:not(.rv-pencil-off) > .rv-why > .rv-sev-down,
+#rv-root .rv-edit-pencil:not(.rv-pencil-held) > .rv-why > .rv-sev-held { display: none; }
+#rv-root .rv-pencil-held:hover > .rv-why { opacity: 1; }
+
+/* #112: the block being edited in place. This is a DOCUMENT element (not inside
+   #rv-root), so it carries our rv- namespace to stay inside the overlay's
+   document-level allowlist. Outline only — no fill or reflow that would shift
+   the surrounding text while typing. No backdrop-filter (not a chrome layer). */
+.rv-editing {
+  outline: 2px solid var(--rv-amber-solid, #d98324);
+  outline-offset: 3px;
+  /* .rv-editing sits on a DOCUMENT block, outside #rv-root, so the token is out
+     of scope here — the literal fallback carries --rv-radius-min's value. */
+  border-radius: var(--rv-radius-min, 4px);
+  caret-color: var(--rv-amber-solid, #d98324);
+}
+
+/* ============================================================
+   Refraction enhancement (Chromium only)
+
+   overlay.js mounts the SVG lens filters + sets html.lg-lens after confirming a
+   Chromium engine. Safari/Firefox never match these selectors, so they keep the
+   frosted backdrop-filter baseline above. Chained blur is lighter here: the lens
+   does part of the diffusion. Only the standard backdrop-filter is overridden
+   (Chromium honors it over the -webkit- twin). Cards/panel stay frosted — the
+   kit lenses only the floating pill and the popover.
+   ============================================================ */
+html.lg-lens #rv-root .rv-toolbar {
+  backdrop-filter: url(#lg-lens-capsule) blur(7px) saturate(180%) brightness(var(--rv-brightness));
+}
+html.lg-lens #rv-root .rv-popover {
+  backdrop-filter: url(#lg-lens-card) blur(9px) saturate(180%) brightness(var(--rv-brightness));
+}
+
+
+/* #60: the anchor is in the document but not visible right now. Sits with
+   .rv-orphan-tag in the expanded card, because the two say related things --
+   orphaned means "no longer here", hidden means "here, but you cannot see it"
+   -- and both belong where the click happened rather than in a page corner. */
+#rv-root .rv-hidden-tag {
+  font-size: 11px; line-height: 1.45; font-style: italic;
+  color: var(--rv-amber-solid);
+  /* #267: note and button on ONE row (Blake, 2026-08-13). The note takes the
+     space it needs and truncates before it wraps; the button never shrinks
+     and never leaves the line. The non-fold branch has no button, so the
+     flex row collapses to a single wrapping paragraph on its own. */
+  display: flex; align-items: baseline; gap: 6px;
+}
+#rv-root .rv-hidden-tag .rv-hidden-tag-text {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+/* The folded-section jump sits inline with its note, upright and small. */
+#rv-root .rv-hidden-tag .rv-btn {
+  font-style: normal; font-size: 11px; padding: 1px 8px;
+  vertical-align: baseline; margin-left: auto; flex: 0 0 auto;
+}
+
+/* #267: the tray opened from a fold mark names the section it is standing in
+   for, and offers the one escalation — unfold — as a deliberate second act at
+   the bottom, never as a side effect of the click that opened it. */
+#rv-root .rv-stack-head-fold { font-style: normal; }
+/* The unfold rides each card's quote line rather than a row at the bottom of
+   the tray (Blake, live pass 2026-08-13): at the bottom it was buried under
+   the cards you were scanning, and the decision to open a section is made
+   while reading ONE comment, not after reading all of them. It sits away from
+   the actions row on purpose — Send / Reply / Resolve are already three
+   buttons wide and a fourth would not fit. */
+#rv-root .rv-stack-unfold-inline {
+  font: 600 10.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: none; border: 0; padding: 0 0 0 6px; margin-left: auto;
+  color: var(--rv-accent, #1d4ed8); cursor: pointer; white-space: nowrap;
+  text-decoration: underline; flex: 0 0 auto;
+}
+#rv-root .rv-stack-unfold-inline:hover { text-decoration: none; }
+#rv-root .rv-stack-q-row { display: flex; align-items: baseline; gap: 4px; }
+#rv-root .rv-stack-q-row > .rv-stack-q { min-width: 0; }
+
+/* The break-glass action inside a refusal capsule (#188 · #191). A capsule is
+   normally inert (.rv-why is pointer-events:none) — this one is not, because
+   when the machine is wrong the author needs a door and "restart the runner" is
+   not an answer a document editor may give. It sits at the BOTTOM of an
+   explanation you had to reach for, so it is never the first thing offered. */
+#rv-root .rv-pencil-held > .rv-why { pointer-events: auto; }
+#rv-root .rv-cap-action {
+  display: inline-block; margin-top: 8px; cursor: pointer;
+  font: inherit; font-size: 11.5px; padding: 3px 10px;
+  border-radius: var(--rv-radius-sm);
+  border: 1px solid var(--rv-border-soft); background: var(--rv-inset-fill); color: var(--rv-ink);
+}
+#rv-root .rv-cap-action:hover { border-color: var(--rv-hold-agent); }
+#rv-root .rv-cap-action.rv-hidden { display: none; }
+
+/* #210: a document-level refusal capsule shown over a block when an edit was
+   refused because someone else holds the lease. Distinct from the ambient hover
+   veil — this is a RESPONSE to an action, not an ambient state. Solid
+   backdrop (#214 — the existing capsule uses a translucent fill that is
+   unreadable over some documents), short text, positioned above the block. */
+#rv-root .rv-lease-refusal {
+  position: absolute; z-index: 20; max-width: 280px;
+  padding: 8px 12px; border-radius: var(--rv-radius-lg);
+  background: var(--rv-glass-fill-strong, #f6f8fb);
+  border: 1px solid var(--rv-border, #e2e7ef);
+  border-left: 3px solid var(--rv-hold-agent, #d98324);
+  box-shadow: var(--rv-shadow-near, 0 2px 8px rgba(0,0,0,0.12));
+  font-size: 12.5px; color: var(--rv-ink, #1c1f26);
+  pointer-events: none; opacity: 1;
+  transition: opacity 200ms ease;
+}
+#rv-root .rv-lease-refusal-body { min-width: 0; }
+#rv-root .rv-lease-refusal-title {
+  font-weight: 600; font-size: 12.5px; line-height: 1.3;
+}
+#rv-root .rv-lease-refusal-sub {
+  margin-top: 2px; font-size: 11.5px; line-height: 1.4;
+  color: var(--rv-ink-soft, #5a6070);
+}
+
+/* ---- markdown in card prose (#246) ----
+   The .rv-md-* elements renderMarkdown builds inside .rv-card-body, .rv-text
+   and the run strip. Sized to card width: pre scrolls sideways rather than
+   widening the panel, lists indent inside the existing padding. These are
+   INNER typography, not card zones — the 4/8/14 gap vocabulary does not
+   apply below this line, so this section lives outside the card block. */
+#rv-root .rv-md-p { margin: 0; }
+#rv-root .rv-md-p + .rv-md-p,
+#rv-root .rv-md-p + .rv-md-list, #rv-root .rv-md-list + .rv-md-p,
+#rv-root .rv-md-list + .rv-md-list,
+#rv-root .rv-md-pre + .rv-md-p, #rv-root .rv-md-p + .rv-md-pre,
+#rv-root .rv-md-bq + .rv-md-p, #rv-root .rv-md-p + .rv-md-bq { margin-top: 6px; }
+#rv-root .rv-md-h { margin: 0; font-weight: 600; line-height: 1.3; }
+#rv-root * + .rv-md-h { margin-top: 8px; }
+#rv-root .rv-md-h1 { font-size: 13.5px; }
+#rv-root .rv-md-h2 { font-size: 13px; }
+#rv-root .rv-md-h3 { font-size: 12.5px; }
+#rv-root .rv-md-list { margin: 0; padding-left: 18px; }
+#rv-root .rv-md-list li { margin-top: 2px; }
+#rv-root .rv-md-list li:first-child { margin-top: 0; }
+#rv-root .rv-md-code {
+  padding: 0 3px; border-radius: var(--rv-radius-sm);
+  background: var(--rv-inset-fill); border: 1px solid var(--rv-border-soft);
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+#rv-root .rv-md-pre {
+  margin: 6px 0 0; padding: 6px 8px; border-radius: var(--rv-radius-sm);
+  background: var(--rv-inset-fill); border: 1px solid var(--rv-border-soft);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* scrolls sideways rather than widening the panel */
+  overflow-x: auto; white-space: pre; max-width: 100%;
+}
+#rv-root .rv-md-pre:first-child { margin-top: 0; }
+#rv-root .rv-md-pre code { font: inherit; background: none; border: none; padding: 0; }
+#rv-root .rv-md-bq {
+  margin: 6px 0 0; padding-left: 8px;
+  border-left: 3px solid var(--rv-border);
+  color: var(--rv-ink-soft);
+}
+#rv-root .rv-md-bq:first-child { margin-top: 0; }
+#rv-root .rv-md-a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+#rv-root .rv-md-a:hover { color: var(--rv-ink); }
+#rv-root .rv-md-b { font-weight: 600; }
+#rv-root .rv-md-i { font-style: italic; }
+
+/* ---- history folding (#247) ----
+   A long entry starts folded: the who·when row is the toggle, a chevron says
+   which state it is in, and one flattened preview line stands in for the body.
+   Both renderings are in the DOM; the fold class picks which one shows. */
+#rv-root .rv-fold-toggle { cursor: pointer; }
+/* A folded entry unfolds from ANYWHERE on it, so the whole box invites. */
+#rv-root .rv-entry-fold.rv-folded { cursor: pointer; }
+#rv-root .rv-fold-chevron { flex: none; display: flex; align-items: center; }
+#rv-root .rv-fold-chevron::before {
+  content: ''; display: block; width: 5px; height: 5px; margin-top: -2px;
+  border: solid var(--rv-ink-faint); border-width: 0 1.5px 1.5px 0;
+  transform: rotate(-45deg); /* points right while folded */
+  transition: transform 120ms ease;
+}
+#rv-root .rv-entry-fold:not(.rv-folded) .rv-fold-chevron::before {
+  transform: rotate(45deg); margin-top: -4px; /* points down while open */
+}
+#rv-root .rv-fold-preview {
+  margin-top: 4px; color: var(--rv-ink); line-height: 1.45;
+  /* TWO clamped lines, not one (Blake, acceptance 2026-08-12) — enough to
+     recognise the entry without unfolding it. */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+#rv-root .rv-entry-fold.rv-folded .rv-entry-full { display: none; }
+#rv-root .rv-entry-fold:not(.rv-folded) .rv-fold-preview { display: none; }
+
+/* ---- multi-block selection note on the pill (#226) ----
+   The pill grows a second line only when the selection spans 2+ stamped
+   blocks: buttons stay a row, the note sits under them. */
+#rv-root .rv-selpill-row { display: flex; align-items: center; gap: 2px; }
+#rv-root .rv-selpill-multi { flex-direction: column; align-items: stretch; border-radius: var(--rv-radius-lg); }
+#rv-root .rv-selpill-note {
+  padding: 2px 6px 3px; max-width: 240px;
+  font-size: 10.5px; line-height: 1.35; color: var(--rv-ink-soft);
+}

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<div class="rv-popup">
+  <h1>Redline Review <span class="build" id="build-tag"></span></h1>
+
+  <div class="panel" id="status-panel">
+    <div class="row" id="row-runner"><span class="dot off"></span><span class="key">Runner</span><span class="value">Checking…</span></div>
+    <div class="row" id="row-also" hidden><span class="dot warn"></span><span class="key">Also up</span><span class="value"></span></div>
+    <div class="row" id="row-phoenix"><span class="dot off"></span><span class="key">Phoenix</span><span class="value">Checking…</span></div>
+    <div class="row" id="row-key" hidden><span class="dot muted"></span><span class="key">API key</span><span class="value">Unknown</span></div>
+    <div class="row" id="row-run" hidden><span class="dot spacer"></span><span class="key">Last run</span><span class="value">—</span></div>
+  </div>
+
+  <button type="button" class="primary" id="open-dir" hidden>Open served directory</button>
+
+  <div id="commands" hidden></div>
+
+  <details id="setup">
+    <summary class="muted">Setup &amp; help</summary>
+    <p class="muted">To review a document you need the local runner
+      (<a id="runner-link" href="#" target="_blank" rel="noreferrer">install instructions</a>):</p>
+    <ol>
+      <li><a id="runner-repo-link" href="#" target="_blank" rel="noreferrer">Get the runner</a> and open a terminal in the project.</li>
+      <li>Run <code>node runner/index.mjs &lt;your-docs-dir&gt;</code> — or <code>redline serve</code> — and the first run walks you through setup.</li>
+      <li>Set <code>OPENROUTER_API_KEY</code> in the environment (or <code>agent.apiKey</code> in <code>redline.config.json</code>). Without it the runner serves and comments work, but no run can reach the agent.</li>
+      <li>Open <code>http://127.0.0.1:5175/&lt;page&gt;.html</code></li>
+    </ol>
+    <p class="muted">For <code>file://</code> pages, also enable “Allow access to file URLs” for this extension in <code>chrome://extensions</code>.</p>
+  </details>
+</div>
+<script src="ports.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
