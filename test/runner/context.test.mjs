@@ -288,34 +288,52 @@ const configExists = (root) => fs.access(path.join(root, CONFIG_FILENAME)).then(
 const SERVED = (out) => out.includes('redline runner serving');
 
 test('onboarding', async (t) => {
-  await t.test('scripted answers write redline.config.json and startup continues', async () => {
+  await t.test('the OpenRouter lane writes redline.config.json and startup continues', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'redline-onb-'));
     t.after(() => fs.rm(root, { recursive: true, force: true }));
     await fs.writeFile(path.join(root, 'style.css'), 'body{}\n');
 
-    // Order: style guide, one model per archetype (ARCHETYPES order, blank =
-    // default except tactical), API key, telemetry endpoint (blank = Phoenix default).
-    const modelAnswers = ARCHETYPES.map((a) => (a === 'tactical' ? 'test/tiny-model' : ''));
+    // Order: lane, style guide, API key, telemetry endpoint (blank = Phoenix
+    // default). Per-archetype model questions were dropped 2026-08-16 — the
+    // defaults stand and `models` is edited in the file, not answered here.
     const { out } = await runRunner({
       root,
       env: { REDLINE_ONBOARDING: 'force', OPENROUTER_API_KEY: '' },
-      answers: ['style.css', ...modelAnswers, 'test-api-key', ''].join('\n') + '\n',
+      answers: ['2', 'style.css', 'test-api-key', ''].join('\n') + '\n',
       until: SERVED,
     });
     assert.ok(out.includes('first-run setup'), 'onboarding banner shown');
     assert.ok(out.includes(`wrote ${path.join(root, CONFIG_FILENAME)}`));
+    assert.ok(!/Model for /.test(out), 'no per-archetype model questions');
 
     const written = JSON.parse(await fs.readFile(path.join(root, CONFIG_FILENAME), 'utf8'));
     assert.deepEqual(written, {
       projectContext: ['style.css'],
-      models: { tactical: 'test/tiny-model' },
       agent: { apiKey: 'test-api-key' },
     });
     // The file it wrote is a valid config the very same startup loaded.
     const cfg = await loadConfig(root, {});
-    assert.equal(cfg.models.tactical, 'test/tiny-model');
-    assert.equal(cfg.models.redesign, DEFAULT_MODELS.redesign, 'blank answer kept the default');
+    assert.equal(cfg.models.redesign, DEFAULT_MODELS.redesign, 'unasked models keep their defaults');
     assert.equal(cfg.telemetry.endpoint, DEFAULT_OTEL_ENDPOINT, 'blank answer keeps the Phoenix default');
+  });
+
+  await t.test('the watcher lane asks nothing else and writes an empty config', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'redline-onb-watch-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    const { out } = await runRunner({
+      root,
+      // No key in the environment: the lane answer, not the env, is what
+      // silences the key question.
+      env: { REDLINE_ONBOARDING: 'force', OPENROUTER_API_KEY: '' },
+      answers: '1\n',
+      until: SERVED,
+    });
+    assert.ok(out.includes('first-run setup'), 'onboarding banner shown');
+    assert.ok(!/Model for |OpenRouter API key|Style guide|OTLP/.test(out),
+      'the lane answer ends the flow');
+    assert.deepEqual(
+      JSON.parse(await fs.readFile(path.join(root, CONFIG_FILENAME), 'utf8')), {},
+      'watcher lane → empty (valid) config');
   });
 
   await t.test('non-TTY stdin skips onboarding silently', async () => {

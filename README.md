@@ -23,47 +23,112 @@ you declined or that timed out. Git is optional; the runner keeps its own
   [Choose your lane](#choose-your-lane) below; you can start without either and
   just take notes.
 
-### Install
+### Install once
 
-**Clone it — you need the repo anyway for the extension:**
-
-```sh
-git clone https://github.com/bhparsons/redline
-cd redline
-node bin/redline.mjs demo          # seeds a sample document and opens it
-```
-
-**Get the short `redline` command** (optional, one line, do it once):
+Redline is a tool you install in one place and then use from anywhere else.
+You will not work inside this clone again.
 
 ```sh
-npm link            # inside the clone; now `redline` works from any directory
+git clone https://github.com/bhparsons/redline ~/redline
+cd ~/redline
+npm link                    # optional: puts `redline` on your PATH
+node bin/redline.mjs demo   # a seeded sample document, to see it work
 ```
 
-Without this, every `redline …` below is `node bin/redline.mjs …` run from
-inside the clone. Both are the same program — `redline` is just a shortcut,
-and cloning does not create it.
+Without `npm link`, every `redline …` below is `node ~/redline/bin/redline.mjs …`
+— the same program, longer to type.
 
-That is the whole install, and it is the only one. **Clone it** — the review
-overlay is a Chrome extension you load from a folder on disk, and you cannot
-load a folder you do not have.
+**Load the extension, once.** At `chrome://extensions`, enable Developer mode,
+click **Load unpacked**, and select `~/redline/extension`. It matches any
+`http://127.0.0.1` page on any port, so this is the last time you touch it.
+Move the clone and the extension breaks — put it somewhere permanent.
 
-Then load the extension (next section) and point Redline at your own document:
+**Attach the watcher skill, once** (Claude Code; other clients have their own
+equivalent):
 
 ```sh
-redline path/to/doc.html      # serves that file's directory and opens the page
-redline serve <dir>           # or serve a whole directory
+ln -s ~/redline/skills/redline-watch ~/.claude/skills/redline-watch
 ```
 
-`redline <file>` reuses a runner already serving that directory rather than
-starting a second one, and picks a free port the extension knows to look on.
-Add `--no-open` to print the URL instead of launching a browser.
+**Symlink it — do not copy it.** The skill finds the rest of Redline by
+resolving that path back to the clone. A copy has nothing to resolve.
 
-The runner binds `127.0.0.1` only. Default port 5175, walking upward to 5184
-if that is taken (`--port N` or `REDLINE_PORT` to pin one). If all ten are
-busy — and on a machine running a lot of local services they can be — it takes
-any free port the operating system offers rather than refusing to start. A
-document served on any port works normally; the extension talks to whichever
-address served the page.
+### Then work from your own repo
+
+Everything after this happens in the project you are reviewing, not in the
+Redline clone.
+
+```sh
+cd ~/projects/my-project
+redline serve .                     # serve the repo root; the runner is now up
+redline install-mcp --client claude # writes ./.mcp.json for this project
+```
+
+Open the document at the URL the runner prints —
+`http://127.0.0.1:5175/docs/plan.html` for `docs/plan.html`. Then, in your
+agent session **started at the repo root**:
+
+> Watch `docs/plan.html` with redline.
+
+It will ask reply-only or reply-and-edit, claim the page, and wait for your
+comments. Because the session is in your repo, it has the rest of the project
+in reach while it edits — which is the point of running it here instead of in
+the Redline clone.
+
+**Serve the repo root, not the document's folder.** Your agent finds the runner
+by walking **up** from its own working directory to a `.redline.lock` file.
+Serve `docs/` and the lock lands in `docs/`, below a session sitting at the
+repo root, and the session will not find it.
+
+| You run | Runner root | Agent at repo root finds it |
+|---|---|---|
+| `redline serve .` | the repo | yes |
+| `redline docs/plan.html` | `docs/` | no |
+
+`redline <file>` is the quick path for a document you are reviewing alone, with
+no agent session attached. `redline serve .` is the one to use with a watcher.
+Add `--no-open` to either to print the URL instead of launching a browser.
+
+### What Redline writes into that repo
+
+Pointing Redline at a document changes things on disk. All of it is local, none
+of it is sent anywhere, and it is worth knowing before you run it on something
+you are about to ship:
+
+| Path | What it is | Safe to delete |
+|---|---|---|
+| the document itself | `data-rev` block ids stamped on first serve | `git restore` it |
+| `<page>.review.json` | the sidecar: comments, replies, run history | that is your review |
+| `.history/` | undo snapshots, at the served root | yes, loses undo |
+| `redline.config.json` | settings for this directory | yes, re-asked next run |
+| `.redline.lock` | how agents find the running runner | yes, on shutdown |
+| `.mcp.json` | the MCP entry `install-mcp` wrote | yes |
+
+Stamping is the only one that touches a file you already had. It adds an
+attribute to each block and changes nothing else — but on a 300-block document
+that is a 300-line diff, so do it on a clean tree.
+
+To keep them out of a repo you ship:
+
+```
+*.review.json
+.history/
+redline.config.json
+.redline.lock
+.mcp.json
+```
+
+### Ports
+
+The runner binds `127.0.0.1` only. Default 5175, walking upward to 5184 if that
+is taken; `--port N` or `REDLINE_PORT` pins one, and a pinned port that is busy
+is an error rather than a walk. If all ten are busy — and on a machine running
+a lot of local services they can be — it takes any free port the operating
+system offers rather than refusing to start. A document served on any port
+works normally; the extension talks to whichever address served the page.
+
+Several runners can be up at once, one per directory. `redline serve .` in a
+second project is a second runner, not a conflict.
 
 ### Choose your lane
 
@@ -99,14 +164,21 @@ anywhere.
 ### First-run onboarding
 
 The first time you point the runner at a directory with no
-`redline.config.json` (and stdin is a terminal), it asks four things:
+`redline.config.json` (and stdin is a terminal), it asks **which lane you are
+on**. Press Enter for your own agent session and setup is over — there is
+nothing to configure for a lane that calls no model and needs no key.
+
+Answer `2` (OpenRouter) and it asks three more things:
 
 1. a style guide / CSS-conventions file to include in every revise prompt
    (optional, stored under `projectContext`),
-2. preferred models per archetype (press Enter to accept each default),
-3. an OpenRouter API key — **press Enter to skip this** if you are on the
-   watcher lane; it is only for the OpenRouter lane,
-4. an OTLP telemetry endpoint (optional; telemetry stays off without one).
+2. an OpenRouter API key (skipped when `OPENROUTER_API_KEY` is already in the
+   environment),
+3. an OTLP telemetry endpoint (Enter keeps the local-Phoenix default; `off`
+   disables export).
+
+Models are not asked about on either lane: the per-archetype defaults stand,
+and overriding one is an edit to `models` in the written file.
 
 Answers are written to `<your-docs-dir>/redline.config.json` and the server
 starts. Pass `--no-onboarding` to skip, or create the config file yourself.
@@ -262,9 +334,15 @@ it simply does not wait for you.
 revising still works: you comment, the comments are saved, you read them back
 and share them. The skill is how the editing gets done, not how Redline runs.
 
-Copy it into your own `~/.claude/skills/` (or your agent's equivalent) and your
-session knows how to use Redline without you explaining it each time. The wire
-protocol it implements is in
+Symlink it into your own `~/.claude/skills/` (or your agent's equivalent) and
+your session knows how to use Redline without you explaining it each time:
+
+```sh
+ln -s ~/redline/skills/redline-watch ~/.claude/skills/redline-watch
+```
+
+A symlink, not a copy — the skill resolves that path back to the clone to find
+the runner and the reference watcher. The wire protocol it implements is in
 [`docs/AGENT-CONTRACT.md`](docs/AGENT-CONTRACT.md), and
 [`examples/watch-collaborate.mjs`](examples/watch-collaborate.mjs) is a
 runnable version of the same loop in plain Node, for agents that are not
@@ -398,10 +476,16 @@ redline install-mcp --client copilot    # ~/.copilot/mcp-config.json
 Then ask in plain language: "Read `docs/plan.html` with redline, comment on
 anything that buries the ask, and revise the first one."
 
-The ten MCP tools: `redline_read_source`, `redline_instrument`,
+The thirteen MCP tools: `redline_read_source`, `redline_instrument`,
 `redline_list_comments`, `redline_add_comment`, `redline_reply`,
-`redline_run_revision`, `redline_propose_edits`, `redline_update_status`,
-`redline_run_status`, `redline_set_ai_edits`, `redline_undo`.
+`redline_direct_edit`, `redline_propose_edits`, `redline_run_revision`,
+`redline_confirm_scope`, `redline_update_status`, `redline_set_ai_edits`,
+`redline_run_status`, `redline_undo`.
+
+Claiming a page, heartbeating, holding a block lease, and subscribing to
+changes have no MCP tool yet — those verbs are HTTP-only, which is why the
+watcher skill still reaches for `curl`. Closing that gap is the next piece of
+work.
 
 Always pass `expectRunId` to `redline_undo`. Without it, undo reverts
 whichever run is on top, including one a human made after yours.

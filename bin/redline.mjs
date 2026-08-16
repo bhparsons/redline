@@ -18,6 +18,7 @@
 //     or starts a runner and speaks the same API the MCP server does.
 
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { runCli, isAgentCommand, USAGE as AGENT_USAGE, EXIT } from '../runner/lib/cli.mjs';
@@ -199,6 +200,19 @@ if (!target) {
 // runner/index.mjs requires an explicit directory; `redline serve` keeps the
 // old default of the current directory. `--port` takes a value, so skip it
 // when looking for a positional argument.
+// The fourth thing that pins a port, after --port and REDLINE_PORT: a
+// runnerPort in the served directory's own config. Read it here rather than
+// through loadConfig — a config too broken to parse is runner/index.mjs's
+// error to report, not a reason for the CLI to refuse to launch it.
+async function configPinsPort(dir) {
+  try {
+    const raw = await fs.readFile(path.join(path.resolve(dir ?? '.'), 'redline.config.json'), 'utf8');
+    return Number.isInteger(JSON.parse(raw)?.runnerPort);
+  } catch {
+    return false;
+  }
+}
+
 function hasPositional(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port') { i++; continue; }
@@ -207,6 +221,19 @@ function hasPositional(argv) {
   return false;
 }
 const args = (cmd === 'serve' && !hasPositional(rest)) ? ['.', ...rest] : rest;
+
+// Pick a free port for `serve` the same way `redline <file>` does. Without
+// this, `serve` binds 5175 and dies with a raw EADDRINUSE the moment a second
+// project is open — which is the documented flow (one runner per repo you
+// review), so it was failing on its most ordinary use. An explicit --port or
+// REDLINE_PORT still pins, and a pinned port that is busy is still an error:
+// you asked for that port, so being moved off it silently would be worse.
+if (cmd === 'serve' && !rest.includes('--port') && !process.env.REDLINE_PORT
+    && !(await configPinsPort(args[0]))) {
+  const { port, scannable, note } = await choosePort();
+  if (!scannable) console.warn(`redline: ${note}`);
+  args.push('--port', String(port));
+}
 
 const child = spawn(process.execPath, [path.join(ROOT, target.script), ...args], { stdio: 'inherit' });
 child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 1)));

@@ -2,12 +2,28 @@
 //
 // maybeRunOnboarding({root, ...}) runs BEFORE loadConfig in runner/index.mjs.
 // When the served root has no redline.config.json AND stdin is interactive,
-// it asks four things and writes a pretty-printed redline.config.json:
-//   1. a style guide / CSS-conventions file (optional → projectContext)
-//   2. preferred models per archetype (Enter accepts the default)
+// it asks which LANE the person is on and writes a pretty-printed
+// redline.config.json:
+//
+//   1. the lane: your own agent session (default) or OpenRouter.
+//
+// On the WATCHER lane that is the only question. Everything the flow used to
+// ask — style guide, models, API key, telemetry endpoint — feeds the paid
+// revise loop and nothing else: projectContext is read only when building a
+// revise prompt (context.mjs), models only when calling OpenRouter, and the
+// only emitRunTrace sites are in the run path. Asking a watcher-lane user to
+// pick a model for five archetypes is five questions about a code path they
+// will never reach (Blake, 2026-08-16).
+//
+// On the OPENROUTER lane it then asks:
+//   2. a style guide / CSS-conventions file (optional → projectContext)
 //   3. an OpenRouter API key (optional — env OPENROUTER_API_KEY wins)
 //   4. an OTLP telemetry endpoint (Enter keeps the local-Phoenix default,
 //      "off" disables export)
+//
+// Per-archetype model overrides are no longer asked on either lane. The
+// defaults are curated (config.mjs DEFAULT_MODELS) and overriding them is an
+// edit to `models` in the written file — a setting, not a first-run decision.
 //
 // Skip conditions (all silent):
 //   - redline.config.json already exists           → never re-onboard
@@ -22,8 +38,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
-import { CONFIG_FILENAME, DEFAULT_MODELS, DEFAULT_OTEL_ENDPOINT } from './config.mjs';
-import { ARCHETYPES } from './classify.mjs';
+import { CONFIG_FILENAME, DEFAULT_OTEL_ENDPOINT } from './config.mjs';
 
 function validHttpUrl(value) {
   try {
@@ -84,7 +99,22 @@ export async function maybeRunOnboarding({
   try {
     output.write('redline first-run setup — press Enter to accept any default.\n');
 
-    // 1. Style guide / CSS conventions → projectContext.
+    // 1. The lane. Answering "1" (or Enter) ends the flow: nothing else here
+    // applies to a session-driven watcher.
+    output.write('\nWho writes your revisions?\n');
+    output.write('  1. your own agent session — Claude Code or another MCP client. Free, no API key.\n');
+    output.write('  2. OpenRouter — Redline calls a model itself. Your key, a cost per run.\n');
+    const laneAnswer = await lines.ask('Lane [1]: ');
+    const openRouterLane = laneAnswer === '2';
+
+    if (!openRouterLane) {
+      await fs.writeFile(configPath, '{}\n', 'utf8');
+      output.write(`wrote ${configPath}\n`);
+      output.write('  watcher lane: no key, no model settings. Attach a session and comment.\n');
+      return { ran: true, configPath, config: {}, lane: 'watcher' };
+    }
+
+    // 2. Style guide / CSS conventions → projectContext.
     const styleGuide = await lines.ask(
       `Style guide or CSS-conventions file (path under ${root}; Enter to skip): `);
     if (styleGuide !== '') {
@@ -93,14 +123,6 @@ export async function maybeRunOnboarding({
       } catch {
         output.write(`  note: "${styleGuide}" does not exist yet — it will be picked up once it does.\n`);
       }
-    }
-
-    // 2. Models per archetype (Enter keeps the default).
-    const models = {};
-    for (const archetype of ARCHETYPES) {
-      const answer = await lines.ask(
-        `Model for ${archetype} [${DEFAULT_MODELS[archetype]}]: `);
-      if (answer !== '') models[archetype] = answer;
     }
 
     // 3. OpenRouter API key (Enter to use env OPENROUTER_API_KEY; Enter to
@@ -130,7 +152,6 @@ export async function maybeRunOnboarding({
 
     const config = {};
     if (styleGuide !== '') config.projectContext = [styleGuide];
-    if (Object.keys(models).length > 0) config.models = models;
     if (apiKey !== '') config.agent = { apiKey };
     if (telemetryEndpoint === 'off') config.telemetry = { endpoint: null };
     else if (telemetryEndpoint !== '') config.telemetry = { endpoint: telemetryEndpoint };
@@ -139,7 +160,8 @@ export async function maybeRunOnboarding({
     // onboarding as done, so the questions never repeat on later starts.
     await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
     output.write(`wrote ${configPath}\n`);
-    return { ran: true, configPath, config };
+    output.write('  models: defaults in effect — add a "models" object to that file to override one.\n');
+    return { ran: true, configPath, config, lane: 'openrouter' };
   } finally {
     rl.close();
   }
