@@ -151,13 +151,41 @@ test('demo never clobbers an existing demo — there may be comments beside it',
     'a demo somebody has worked in is never overwritten');
 });
 
-test('demo does not copy the sample\'s review sidecar', async () => {
+test('demo seeds the teaching thread and NEVER the sample\'s own review sidecar', async () => {
+  // This began as "a fresh demo has no sidecar at all", which was the right rule
+  // stated through the wrong evidence: what must never travel is
+  // samples/sample-memo.html.review.json — Blake's real review, with his
+  // comments and his run history in it. #279 gave the demo a sidecar on purpose
+  // (four cards that teach the four kinds of comment), so the assertion moved to
+  // the thing actually at stake: the seeded thread is the TOUR, and none of the
+  // sample's own review can be found in it.
   const dir = await tmp('sidecar');
   const target = path.join(dir, DEMO_DIR);
-  await seedDemo({ repoRoot: REPO_ROOT, dir: target });
-  const entries = await fs.readdir(target);
-  assert.ok(!entries.some((f) => f.endsWith('.review.json')),
-    "a fresh demo starts empty — the sample's sidecar is Blake's review, not the user's");
+  const out = await seedDemo({ repoRoot: REPO_ROOT, dir: target });
+
+  const seededThread = JSON.parse(await fs.readFile(`${out.absFile}.review.json`, 'utf8'));
+  assert.ok(seededThread.comments.every((c) => c.id.startsWith('c-demo-')),
+    'every seeded comment is a demo card');
+
+  // In THIS repo the sample carries a real review to compare against. In the
+  // published mirror it does not exist at all — the publisher strips every
+  // *.review.json — and that absence is a stronger guarantee than any
+  // comparison, so the test asserts whichever proof its tree can offer rather
+  // than assuming it is running at home.
+  const samplesSidecar = path.join(REPO_ROOT, 'samples', 'sample-memo.html.review.json');
+  const raw = await fs.readFile(samplesSidecar, 'utf8').catch(() => null);
+  if (raw === null) {
+    const entries = await fs.readdir(path.join(REPO_ROOT, 'samples'));
+    assert.ok(!entries.some((f) => f.endsWith('.review.json')),
+      'no review sidecar ships, so none can leak into a demo');
+    return;
+  }
+  const mine = JSON.parse(raw);
+  assert.ok(mine.comments.length > 0, 'the sample really does carry a review, so this test has something to catch');
+  const leaked = new Set(mine.comments.map((c) => c.id));
+  for (const c of seededThread.comments) {
+    assert.ok(!leaked.has(c.id), `${c.id} came from the sample's own review sidecar`);
+  }
 });
 
 test('the CLI starts runners only where the extension will look', async () => {

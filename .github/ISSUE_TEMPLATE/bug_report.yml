@@ -1,0 +1,75 @@
+name: Something went wrong
+description: Report a bug in Redline — the extension, the runner, or the agent loop.
+labels: ["beta-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Four things make a report actionable, and three of them are already on screen.
+        If you only have one of them, file it anyway — a partial report beats a silent one.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What you did
+      description: One line is enough. What were you trying to do when it went wrong?
+      placeholder: Left a comment on a paragraph and pressed Send.
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Runner version and extension version
+      description: >
+        Click the Redline icon in your toolbar — the popup shows both, side by side.
+        Include BOTH even if one looks irrelevant. A stale extension talking to a newer
+        runner is the single most common cause of "it stopped working", and it is
+        invisible unless the two numbers are compared.
+      placeholder: "runner 0.2.37 · extension 0.4.76"
+    validations:
+      required: true
+
+  - type: input
+    id: run-id
+    attributes:
+      label: Run id
+      description: If a revision was involved. It is on the run strip in the panel, and in the run log.
+      placeholder: run-3aa019154ae5
+    validations:
+      required: false
+
+  - type: dropdown
+    id: runner-up
+    attributes:
+      label: Was the runner up?
+      description: >
+        The popup's runner row says. This one matters more than it looks: the runner is
+        also the web server for your document, so when it stops, the page stops loading
+        too — which reads as the extension being broken.
+      options:
+        - "Yes — the popup showed a runner"
+        - "No — the popup showed no runner"
+        - "I do not know"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: >
+        If nothing visibly happened, say that — "nothing happened" is a real symptom and
+        usually means the agent session was not listening rather than the button failing.
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: >
+        Console output, the document if you can share it, the comment text. Do not paste
+        an API key — Redline never needs one on the free lane, and one in an issue is public.
+    validations:
+      required: false

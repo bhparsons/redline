@@ -193,6 +193,38 @@ export function withWelcomeNote(html) {
 }
 
 /**
+ * Put the teaching thread beside the demo document (#279).
+ *
+ * The demo used to arrive with an empty sidecar, so the first thing a new user
+ * saw was a document and no evidence that the tool did anything. These four
+ * cards ARE the tour: an edit request, a note, a question left open, and a
+ * decline with its reasoning. Reading them takes twenty seconds and answers the
+ * questions the README spends a page on.
+ *
+ * Deliberately not work to be done. A watcher leaves pre-existing comments
+ * alone — that rule is what stops it rewriting your backlog the moment it
+ * attaches — so these stay put, stay readable, and never get quietly actioned
+ * out of existence.
+ *
+ * Absent or unreadable, the demo is still a demo: a missing tour is worth less
+ * than a document, and failing the seed over it would trade the whole feature
+ * for its garnish.
+ */
+async function seedComments(repoRoot, docPath) {
+  const sidecar = `${docPath}.review.json`;
+  if (await fs.stat(sidecar).catch(() => null)) return false;
+  try {
+    const raw = await fs.readFile(path.join(repoRoot, 'samples', 'demo-comments.json'), 'utf8');
+    const thread = JSON.parse(raw);
+    delete thread._comment;
+    await fs.writeFile(sidecar, `${JSON.stringify(thread, null, 2)}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Seed the demo directory. Never clobbers an existing demo document — someone
  * who has commented on it has real work in the sidecar beside it, and a `demo`
  * that silently resets that is a data-loss bug wearing a friendly name.
@@ -213,7 +245,8 @@ export async function seedDemo({ repoRoot, dir = DEMO_DIR, source = DEMO_SOURCE 
   // directory the person did not choose and does not own yet.
   const cfg = path.join(target, 'redline.config.json');
   if (!(await fs.stat(cfg).catch(() => null))) await fs.writeFile(cfg, '{}\n');
-  return { root: target, absFile: dest, name, seeded: true };
+  const comments = await seedComments(repoRoot, dest);
+  return { root: target, absFile: dest, name, seeded: true, comments };
 }
 
 // ---- what bin/redline.mjs calls -------------------------------------------

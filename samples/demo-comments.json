@@ -1,0 +1,92 @@
+{
+  "_comment": "#279: the comment thread `redline demo` seeds. Read the four cards, then write your own — they teach what the overlay can hold. Deliberately NOT work to be done: a watcher leaves pre-existing comments alone (that is the rule, so it never rewrites your backlog), so these stay put and stay readable.",
+  "rev": 4,
+  "comments": [
+    {
+      "id": "c-demo-edit",
+      "body": "\"clear every bar\" is doing a lot of work here. Say which bars, or cut the claim.\n\nThis is an EDIT REQUEST — the ordinary kind. An attached agent session rewrites the sentence, replies saying what changed, and marks this addressed.",
+      "createdAt": "2026-08-01T09:12:00.000Z",
+      "status": "open",
+      "rev": 1,
+      "anchor": {
+        "quote": "the numbers now clear every bar we set in January",
+        "blockId": "r-cece",
+        "prefix": "We should open the Fremont location in March — ",
+        "suffix": ", and the lease window closes in six weeks"
+      },
+      "replies": []
+    },
+    {
+      "id": "c-demo-note",
+      "body": "Check the 34% against the corridor BID's own count before this goes out.\n\nThis is a NOTE — see the chip on the card. Notes are context, never work: nothing edits this text on the strength of it, and Send All skips it. Use notes for anything you want remembered but not acted on.",
+      "createdAt": "2026-08-01T09:14:00.000Z",
+      "status": "open",
+      "rev": 1,
+      "aiEdits": false,
+      "anchor": {
+        "quote": "Weekend foot traffic on the corridor is up 34% year over year",
+        "blockId": "r-9a46",
+        "suffix": ", and our wholesale accounts in the neighborhood have doubled"
+      },
+      "replies": []
+    },
+    {
+      "id": "c-demo-question",
+      "body": "Is the espresso machine lead time a supplier quote or an estimate?\n\nA QUESTION gets an answer and stays OPEN. You decide when your question is answered — an agent replying to it does not close it, because being told something is not the same as being satisfied.",
+      "createdAt": "2026-08-01T09:16:00.000Z",
+      "status": "open",
+      "rev": 2,
+      "anchor": {
+        "quote": "a second espresso machine delay would push opening past the summer lull",
+        "blockId": "r-f62d"
+      },
+      "replies": [
+        {
+          "id": "rp-demo-answer",
+          "body": "Supplier quote — Ferrara, 9–11 weeks, confirmed 18 July. I have left this open; close it yourself when you are happy.",
+          "createdAt": "2026-08-01T09:21:00.000Z",
+          "creator": "agent",
+          "agentName": "claude-code"
+        }
+      ]
+    },
+    {
+      "id": "c-demo-declined",
+      "body": "Drop the participant list, it is internal.\n\nThis one was DECLINED and the card says why. An agent that disagrees pushes back rather than complying — declining is a real outcome, not a failure, and the reasoning stays on the thread where you can argue with it.",
+      "createdAt": "2026-08-01T09:18:00.000Z",
+      "status": "declined",
+      "rev": 3,
+      "anchor": {
+        "quote": "Participants: Blake Parsons (owner), Maya Chen (flagship GM), Daniel Ortiz (finance lead)",
+        "blockId": "r-771d"
+      },
+      "resolution": {
+        "runId": "run-demo-0001",
+        "decision": "declined",
+        "summary": "Left the participant list in place",
+        "note": "The memo is addressed to the working group and names them in the footer already; removing the list here would leave the footer referring to people the reader never met. Say the word and I will cut both."
+      },
+      "replies": []
+    }
+  ],
+  "runs": [
+    {
+      "runId": "run-demo-0001",
+      "createdAt": "2026-08-01T09:19:30.000Z",
+      "lane": "proposed",
+      "model": null,
+      "status": "ok",
+      "rev": 3,
+      "commentId": "c-demo-declined",
+      "actor": { "creator": "agent", "agentName": "claude-code" },
+      "edits": [],
+      "decisions": [
+        {
+          "id": "c-demo-declined",
+          "decision": "declined",
+          "summary": "Left the participant list in place"
+        }
+      ]
+    }
+  ]
+}
