@@ -179,6 +179,20 @@ function pidAlive(pid) {
   }
 }
 
+/** Does a runner on this port actually answer? The lock records a pid and a
+ *  port; a pid proves a process exists, and only a reply proves it is serving.
+ *  Short timeout on purpose — this runs on the startup path, and a runner that
+ *  needs more than a second to answer /health is not one to defer to. */
+async function respondsToHealth(port) {
+  if (!Number.isInteger(port) || port <= 0) return false;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1_000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // Create <root>/.redline.lock, refusing when a LIVE runner holds it and
 // replacing it when the recorded pid is dead (stale lock from a crash — a
 // crash can't run the cleanup hooks). Two processes racing past a stale lock
@@ -199,10 +213,29 @@ async function acquireLock(lockPath, payload) {
   }
   if (existing !== null && typeof existing === 'object'
       && Number.isInteger(existing.pid) && pidAlive(existing.pid)) {
+    // A LIVE PID IS NOT A LIVE RUNNER (#304). Blake hit this after Ctrl-Z: a
+    // suspended process (state T) still holds its port and its lock and answers
+    // nothing, and this told him something was "already serving" when nothing
+    // was being served at all. He then went looking for a working runner and
+    // found a dead port.
+    //
+    // runner/lib/discovery.mjs believes a lock only after THREE checks — live
+    // pid, healthy /health, matching /api/info root. This path used the weakest
+    // of the three, so the two surfaces disagreed about the same lock: discovery
+    // walked on, startup stopped. Ask the same question discovery asks, and when
+    // the answer is "it is there but not answering", say THAT.
+    const answering = await respondsToHealth(existing.port);
+    if (answering) {
+      throw new Error(
+        `another runner is already serving this directory (pid ${existing.pid}, `
+        + `port ${existing.port ?? 'unknown'}) — stop it first, or serve a different `
+        + `directory (lock: ${lockPath})`);
+    }
     throw new Error(
-      `another runner is already serving this directory (pid ${existing.pid}, `
-      + `port ${existing.port ?? 'unknown'}) — stop it first, or serve a different `
-      + `directory (lock: ${lockPath})`);
+      `a runner process is holding this directory but is not responding `
+      + `(pid ${existing.pid}, port ${existing.port ?? 'unknown'}). It may be suspended — `
+      + `Ctrl-Z stops a runner without releasing it. Resume it with \`fg\`, or stop it with `
+      + `\`kill -9 ${existing.pid}\` and remove ${lockPath}`);
   }
   await fs.writeFile(lockPath, payload); // dead pid → stale lock, take it over
 }

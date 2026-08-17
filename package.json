@@ -1,6 +1,6 @@
 {
   "name": "redline",
-  "version": "0.2.44",
+  "version": "0.2.45",
   "description": "Google-Docs-style review layer for static HTML documents, with an agentic revision loop: comment in the browser, a headless Claude session applies the edits under a verified contract, you approve the results.",
   "type": "module",
   "bin": {

@@ -239,9 +239,19 @@ const handlers = {
     const result = await client.proposeEdits({
       page,
       ...(flags['comment-id'] ? { commentId: flags['comment-id'] } : {}),
+      // ALL SIX, not three (#303). This forwarded decisions, edits and inserts
+      // and silently dropped theme, attributeEdits and scope — then returned
+      // status "ok" with edits: [], so the caller believed a proposal had
+      // applied when nothing had been written. A silent no-op that reports
+      // success is worse than an error, and it also made the page-level scope
+      // gate unreachable from this surface: a theme edit is the main way to
+      // trip it, and a theme edit could not be expressed.
       ...(proposal.decisions ? { decisions: proposal.decisions } : {}),
       ...(proposal.edits ? { edits: proposal.edits } : {}),
       ...(proposal.inserts ? { inserts: proposal.inserts } : {}),
+      ...(proposal.attributeEdits ? { attributeEdits: proposal.attributeEdits } : {}),
+      ...(proposal.theme !== undefined ? { theme: proposal.theme } : {}),
+      ...(proposal.scope !== undefined ? { scope: proposal.scope } : {}),
       dryRun: !apply,
       ...actorFrom(flags, env),
     });
@@ -251,10 +261,32 @@ const handlers = {
         : [`INVALID [${result.code}]${result.blockId ? ` on ${result.blockId}` : ''}: ${result.error}`];
       return { code: result.valid ? EXIT.ok : EXIT.invalid, json: result, lines };
     }
+    // THE GATE IS A REAL OUTCOME, not a malformed apply (#303). A proposal that
+    // reaches past its section or changes the page theme comes back as
+    // {pendingConfirmation, runId, scope} with NO `edits` — and this read
+    // result.edits.length unconditionally, so the CLI crashed with "Cannot read
+    // properties of undefined" on a perfectly correct response.
+    //
+    // It went unnoticed because the two bugs hid each other: the CLI also
+    // dropped `theme` on the way out, and a theme change is the main way to
+    // trip the gate, so the payload that would have exposed this never arrived.
+    // Fixing the drop is what surfaced the crash.
+    if (result.pendingConfirmation) {
+      const reasons = result.scope?.reasons?.join('; ') || 'reaches beyond the anchored section';
+      return {
+        code: EXIT.ok,
+        json: result,
+        lines: [
+          `${result.runId}  PAUSED  the scope gate stopped this write — nothing was applied`,
+          `  ${result.scope?.level ?? 'section'}-level: ${reasons}`,
+          `  answer it: redline confirm ${result.runId} --allow | --decline, or from the overlay`,
+        ],
+      };
+    }
     return {
       code: EXIT.ok,
       json: result,
-      lines: [`${result.runId}  applied  edits=${result.edits.length}`],
+      lines: [`${result.runId}  applied  edits=${(result.edits ?? []).length}`],
     };
   },
 
