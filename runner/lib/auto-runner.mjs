@@ -104,6 +104,37 @@ export function startRunner(dir, { port = 0, timeoutMs = START_TIMEOUT_MS, env =
  * Attach to the runner serving `dir`, or start one.
  * Returns {base, port, root, spawned, stop()}.
  */
+
+/**
+ * Start a runner, preferring the port window the extension's fallback scan
+ * knows (5175-5179).
+ *
+ * An agent-started runner used to always take an ephemeral port — 55081 in the
+ * session that found this. Documents it serves still work, because the
+ * extension uses the origin that served the page; but the popup and any file://
+ * page have to guess, and they only guess inside the window. An agent starting
+ * a runner the human then cannot find from the popup is a bad default when
+ * landing inside the window costs one probe.
+ *
+ * The window is a PREFERENCE, never a replacement for port 0. choosePort() only
+ * observes that a port was free a moment ago and the runner binds it later, so
+ * two agents starting at once can pick the same one and one dies with
+ * EADDRINUSE. Port 0 has no such race — the OS assigns it under the bind. So
+ * the raceless option stays as the fallback on both paths.
+ */
+async function startOnPreferredPort(target, { timeoutMs, env }) {
+  const { choosePort } = await import('./open-doc.mjs');
+  const { port, scannable } = await choosePort();
+  if (!scannable) return startRunner(target, { port: 0, timeoutMs, env });
+  try {
+    return await startRunner(target, { port, timeoutMs, env });
+  } catch {
+    // Someone took it between the probe and the bind. An ephemeral port is
+    // worse for the popup and better than not starting at all.
+    return startRunner(target, { port: 0, timeoutMs, env });
+  }
+}
+
 export async function ensureRunner({ dir, autoStart = true, env = process.env, timeoutMs } = {}) {
   const target = path.resolve(dir);
   const found = await discoverRunner(target);
@@ -115,7 +146,7 @@ export async function ensureRunner({ dir, autoStart = true, env = process.env, t
       `no runner is serving ${target} and auto-start is disabled — run: node runner/index.mjs ${target}`);
   }
   try {
-    const started = await startRunner(target, { timeoutMs, env });
+    const started = await startOnPreferredPort(target, { timeoutMs, env });
     return { base: started.base, port: started.port, root: target, spawned: true, stop: started.stop };
   } catch (err) {
     // Lost a start race (another agent's runner took the lock between our

@@ -275,3 +275,51 @@ test('watch_stop releases the claim, and the page stops showing a watcher', asyn
   // And the loop verbs say so plainly rather than failing obscurely.
   await assert.rejects(() => f.call('redline_wait_for_change'), /not watching/);
 });
+
+test('an orchestrator that acknowledges with a plain reply can still park', async (t) => {
+  // The failure this exists for (live session, 2026-08-17): the cursor only
+  // advanced inside redline_resolve_comment, but the orchestrator pattern
+  // ACKNOWLEDGES first with redline_reply and delegates the work. A reply bumps
+  // the comment's rev like any other write, so the orchestrator replayed its own
+  // acknowledgement as a delta forever — wait_for_change returned in 0 ms every
+  // time and it could never park.
+  const f = await fixture();
+  t.after(() => f.close());
+
+  await f.call('redline_watch_start', { mode: 'reply-and-edit' });
+  const c = await f.comment('tighten the opening');
+  const change = await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+  assert.equal(change.actionable.length, 1);
+
+  // Acknowledge and hand off. No edit, no status — exactly what an orchestrator
+  // does before a worker picks the comment up.
+  await f.call('redline_reply', { commentId: c.id, body: 'Got it — tightening the opening.' });
+
+  const quiet = await f.call('redline_wait_for_change', { timeoutMs: 1_500 });
+  assert.equal(quiet.changed, false, 'the acknowledgement must not read back as new work');
+  assert.ok(quiet.waitedMs > 1_000, `it actually parked (waited ${quiet.waitedMs}ms), rather than returning at once`);
+});
+
+test('every comment-mutating tool advances the cursor, not just resolve_comment', async (t) => {
+  const f = await fixture();
+  t.after(() => f.close());
+
+  await f.call('redline_watch_start', { mode: 'reply-and-edit' });
+  const c = await f.comment('a thing to handle');
+  await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+
+  // Each of these bumps the comment's rev; none of them is resolve_comment.
+  await f.call('redline_reply', { commentId: c.id, body: 'looking at it' });
+  await f.call('redline_update_status', { commentId: c.id, status: 'deferred' });
+  await f.call('redline_set_ai_edits', { commentId: c.id, aiEdits: false });
+
+  const quiet = await f.call('redline_wait_for_change', { timeoutMs: 1_500 });
+  assert.equal(quiet.changed, false, 'three of our own writes, zero deltas');
+
+  // And a real change from someone else still gets through — the filter must
+  // not have become "ignore this comment".
+  await f.post(`/api/comment/${encodeURIComponent(c.id)}/reply`, { page: 'doc.html', body: 'actually, no' });
+  const woke = await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+  assert.equal(woke.changed, true);
+  assert.equal(woke.comments[0].id, c.id);
+});

@@ -113,6 +113,20 @@ export function createClient(base) {
   };
 }
 
+/** Is a cached connection still answering? A pending promise that has not
+ *  resolved yet counts as alive — it is a start in flight, not a corpse — and
+ *  any failure counts as dead, because the only use of the answer is deciding
+ *  whether to throw the entry away. */
+async function stillAlive(pending) {
+  try {
+    const { base } = await pending;
+    const res = await fetch(`${base}/health`, { signal: AbortSignal.timeout(1_500) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 /** Does `p` exist as a regular file? */
 async function isFile(p) {
   try {
@@ -166,7 +180,23 @@ export async function connectToPage(target, {
   } else if (sessions) {
     // Store the PROMISE so two concurrent tool calls on one directory can't
     // both start a runner.
+    //
+    // The cache USED to be permanent once resolved, and only evicted when
+    // ensureRunner itself rejected. So a runner that died after being cached —
+    // the human stopped it, it was replaced by one on a better port, the
+    // machine slept — left every later tool call dialling a dead port, with no
+    // way to recover except restarting the MCP server. Found in a live session
+    // (Blake, 2026-08-17), and "reconnect the MCP server" is not a recovery a
+    // user should have to know.
+    //
+    // So a cache HIT is now checked before it is handed out. It is one
+    // loopback request against a runner we have already reached; a miss costs a
+    // rediscovery, which is what should have happened anyway.
     let pending = sessions.get(resolved.dir);
+    if (pending !== undefined && !(await stillAlive(pending))) {
+      sessions.delete(resolved.dir);
+      pending = undefined;
+    }
     if (pending === undefined) {
       pending = ensureRunner({ dir: resolved.dir, autoStart, env });
       sessions.set(resolved.dir, pending);

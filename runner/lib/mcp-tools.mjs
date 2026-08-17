@@ -125,11 +125,11 @@ async function addComment(args, env) {
   if (args.aiEdits !== undefined && typeof args.aiEdits !== 'boolean') {
     throw new ParamError('aiEdits must be true or false');
   }
-  const comment = await client.addComment({
+  const comment = noteOurWrite(base, page, await client.addComment({
     page, body, anchor,
     ...(args.aiEdits === undefined ? {} : { aiEdits: args.aiEdits }),
     ...actorFor(args, env),
-  });
+  }));
   return { page, runner: base, comment };
 }
 
@@ -179,6 +179,15 @@ async function proposeEdits(args, env) {
     dryRun: args.dryRun !== false,
     ...actorFor(args, env),
   });
+  // A run reports decisions, not comments, so the cursor has to be read rather
+  // than taken from the response.
+  const watch = watches.get(watchKey(base, page));
+  if (watch) {
+    const decided = (args.decisions ?? []).map((d) => d?.id).filter((id) => typeof id === 'string');
+    for (const id of new Set([...decided, ...(commentId ? [commentId] : [])])) {
+      await watch.advanceCursor(id);
+    }
+  }
   return { page, runner: base, ...result };
 }
 
@@ -221,7 +230,8 @@ async function updateStatus(args, env) {
   const commentId = requireString(args, 'commentId');
   const status = requireString(args, 'status');
   const { client, page, base } = await open(args, env);
-  const comment = await client.setStatus(commentId, { page, status, ...actorFor(args, env) });
+  const comment = noteOurWrite(base, page,
+    await client.setStatus(commentId, { page, status, ...actorFor(args, env) }));
   return { page, runner: base, comment };
 }
 
@@ -245,7 +255,8 @@ async function reply(args, env) {
   const commentId = requireString(args, 'commentId');
   const body = requireString(args, 'body');
   const { client, page, base } = await open(args, env);
-  const comment = await client.reply(commentId, { page, body, ...actorFor(args, env) });
+  const comment = noteOurWrite(base, page,
+    await client.reply(commentId, { page, body, ...actorFor(args, env) }));
   return { page, runner: base, comment };
 }
 
@@ -270,7 +281,8 @@ async function setAiEdits(args, env) {
   const commentId = requireString(args, 'commentId');
   if (typeof args.aiEdits !== 'boolean') throw new ParamError('aiEdits must be true or false');
   const { client, page, base } = await open(args, env);
-  const comment = await client.setAiEdits(commentId, { page, value: args.aiEdits });
+  const comment = noteOurWrite(base, page,
+    await client.setAiEdits(commentId, { page, value: args.aiEdits }));
   return { page, runner: base, comment };
 }
 
@@ -284,6 +296,16 @@ async function setAiEdits(args, env) {
 const watches = new Map(); // `${base}|${page}` -> WatchSession
 
 const watchKey = (base, page) => `${base}|${page}`;
+
+/** Tell the watch on this page that WE just wrote to this comment, so its own
+ *  write is not replayed to it as a delta. Every comment-mutating tool routes
+ *  its result through here — not just redline_resolve_comment — because the
+ *  orchestrator acknowledges with a plain reply before delegating, and that
+ *  reply bumps the comment's rev like any other write. */
+function noteOurWrite(base, page, comment) {
+  watches.get(watchKey(base, page))?.noteWrite(comment);
+  return comment;
+}
 
 /** The session this call is about. `file` is optional once watching: with
  *  exactly one page under watch there is nothing to disambiguate, and making

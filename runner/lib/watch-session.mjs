@@ -236,8 +236,23 @@ export class WatchSession {
     };
   }
 
-  /** Mark a comment handled at its current rev, so our own reply does not read
-   *  back as new work. Called after a write, never before. */
+  /** Mark a comment handled at its current rev, so our own write does not read
+   *  back as new work. Called after a write, never before.
+   *
+   *  EVERY write this session makes has to come through here, not just the one
+   *  in redline_resolve_comment. The orchestrator pattern acknowledges a comment
+   *  with a plain reply before delegating it, and a reply bumps the comment's
+   *  rev — so with only resolve_comment advancing the cursor, an orchestrator
+   *  replayed its own acknowledgement as a delta forever and `wait_for_change`
+   *  returned in 0 ms every time instead of parking. Found in a live session
+   *  (2026-08-17). */
+  noteWrite(comment) {
+    if (comment && typeof comment.id === 'string') this.cursor.set(comment.id, comment.rev ?? 0);
+    return comment;
+  }
+
+  /** Same, when the write did not hand back the updated comment (a run with
+   *  decisions), so the current rev has to be read. */
   async advanceCursor(commentId) {
     const { comments } = await this.client.comments(this.page, { sessionId: this.sessionId });
     const found = comments.find((c) => c.id === commentId);
