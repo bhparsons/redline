@@ -1,8 +1,19 @@
-// test/runner/restore-scar.test.mjs — #58: a failed snapshot restore is never
-// swallowed. When a failed run cannot roll the doc back (here: the pre-run
-// snapshot vanished mid-run), the run record carries restoreFailed +
-// restoreError instead of silently claiming a clean rollback — that is the
-// difference between "failed, doc clean" and "failed, doc may be corrupt".
+// test/runner/restore-scar.test.mjs — #58: a failed rollback is never
+// swallowed. When a failed run cannot put the document back, the run record
+// carries restoreFailed + restoreError instead of silently claiming a clean
+// rollback — that is the difference between "failed, doc clean" and "failed,
+// doc may be corrupt".
+//
+// AMENDED BY #288. The rollback is now TARGETED: it puts back the blocks the
+// run wrote, using their recorded beforeInner, rather than restoring the whole
+// file. Two consequences, and this file tests both:
+//
+//   - A run that failed WITHOUT WRITING has nothing to put back, so a missing
+//     snapshot is irrelevant and there is no scar. Reporting one would be a
+//     false alarm on the one channel that has to stay trustworthy.
+//   - A run that DID write and cannot revert — because its records are not
+//     plain inner swaps — still falls back to the whole-file snapshot, and
+//     when THAT is gone the scar appears exactly as #58 requires.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -79,21 +90,38 @@ test('failed run whose restore has no snapshot records a scar', async (t) => {
     assert.equal(await fs.readFile(path.join(root, 'doc.html'), 'utf8'), DOC_HTML);
   });
 
-  await t.test('vanished snapshot → restoreFailed scar on the run record', async () => {
+  await t.test('a run that failed WITHOUT writing needs no restore, and says nothing', async () => {
+    // #288: the snapshot is gone, and it does not matter — the reply never
+    // parsed, so nothing was ever applied and there is nothing to put back.
+    // Before the targeted rollback this reported restoreFailed, which read as
+    // "the document may be corrupt" about a document that was never touched.
     state.onRequest = () => fs.rm(path.join(root, '.history'), { recursive: true, force: true });
     const res = await postJson(`${base}/api/run`, { page: 'doc.html', commentId });
     state.onRequest = null;
     assert.equal(res.status, 502);
     const body = await res.json();
     assert.equal(body.run.status, 'failed');
-    assert.equal(body.run.restoreFailed, true);
-    assert.match(body.run.restoreError, /snapshot/);
-
-    // The scar is persisted on the sidecar's run record too.
-    const sidecar = JSON.parse(await fs.readFile(path.join(root, 'doc.html.review.json'), 'utf8'));
-    const last = sidecar.runs.at(-1);
-    assert.equal(last.runId, body.run.runId);
-    assert.equal(last.restoreFailed, true);
-    assert.match(last.restoreError, /snapshot/);
+    assert.equal(body.run.edits?.length ?? 0, 0, 'the run wrote nothing');
+    assert.equal(body.run.restoreFailed, undefined, 'so there is no rollback to have failed');
+    assert.equal(await fs.readFile(path.join(root, 'doc.html'), 'utf8'), DOC_HTML);
   });
+
+  // THE SCENARIO THIS FILE USED TO TEST IS NOT REACHABLE ANY MORE, and finding
+  // that out is worth more than the test was.
+  //
+  // A rollback in `finish` only runs on status 'failed'. A single run is
+  // all-or-nothing, so a failure means zero edits were applied. A batch since
+  // WP8 does NOT fail as a unit — successes land and failures are marked
+  // per-comment, giving status 'partial', which deliberately does not restore.
+  //
+  // So `status === 'failed' && edits.length > 0` cannot be produced through the
+  // API. Every restore that path ever performed was on a run that had written
+  // NOTHING — which means the whole-file rollback there was never able to help,
+  // and was only ever able to erase a concurrent writer. That is #288 in one
+  // sentence, and it is why the fix makes the reachable case a no-op rather
+  // than merely a narrower rollback.
+  //
+  // revertRunEdits keeps the whole-file fallback for records that are not plain
+  // inner swaps. It is defensive, not dead: any future path that fails after
+  // writing lands there, and #58's guarantee holds when it does.
 });

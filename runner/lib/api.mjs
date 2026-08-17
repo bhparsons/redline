@@ -1053,11 +1053,15 @@ async function confirmRun(root, config, req, res) {
 
   if (payload.allow !== true) {
     registry.release(pending.runId);
-    // Declined: nothing was ever written; drop the pre-run snapshot back in
-    // (a no-op restore) and report the run as never-applied. A failed restore
-    // here is still reported (#58) — the belt-and-braces restore is only safe
-    // to skip silently if it actually happened.
-    const scar = await restoreOrScar({ root, page: pending.page, htmlPath, runId: pending.runId, where: 'confirm-decline' });
+    // Declined: nothing was ever written, so THERE IS NOTHING TO RESTORE.
+    //
+    // This used to restore the pre-run snapshot anyway, calling it belt and
+    // braces. It was neither (#288). A snapshot is the WHOLE FILE, so putting
+    // it back does not undo this run — it undoes every OTHER run that landed
+    // since the snapshot was taken. And the window here is not milliseconds:
+    // it is however long the Allow/Decline card sits on screen waiting for a
+    // human to read it. A belt that can strangle you is not a safety measure.
+    const scar = null;
     // The pending pass already made — and paid for — a full agent call
     // (measured at $0.056 on a 22 KB page) plus its routing call. Until #124
     // a decline recorded NOTHING: real money, invisible. #128 makes it VISIBLE:
@@ -1080,7 +1084,11 @@ async function confirmRun(root, config, req, res) {
     ? pending.scope.touchedBlocks : [];
   if (!registry.covers(pending.runId, willTouch)) {
     registry.release(pending.runId);
-    const scar = await restoreOrScar({ root, page: pending.page, htmlPath, runId: pending.runId, where: 'confirm-stale' });
+    // The re-base check refused, so the stashed edits were never written and
+    // there is nothing of this run's to undo (#288). Restoring the whole file
+    // here would revert whoever DID write in the meantime — which is precisely
+    // the writer whose arrival made this confirmation stale.
+    const scar = null;
     sendJson(res, 409, {
       error: 'the document changed under this confirmation — re-run the comment',
       reason: 'stale-confirmation',
@@ -1201,6 +1209,66 @@ async function restoreOrScar({ root, page, htmlPath, runId, where }) {
     `[redline] RESTORE FAILED (${where}) for run ${runId} on ${page}: ${scar.error} — `
     + 'the document may retain edits from the failed run');
   return scar;
+}
+
+/**
+ * Undo a failed run by putting ITS blocks back, not the whole file (#288).
+ *
+ * A snapshot is the entire document. Restoring one does not undo a run — it
+ * undoes every run that landed since the snapshot was taken. Run A applies, run
+ * B fails twenty seconds later and rolls the page back to before A: A's edit is
+ * gone, A's record still says `ok`, and nothing anywhere says so. Silent data
+ * loss, in the component whose whole job is that writes are safe.
+ *
+ * So revert the blocks this run actually wrote, using the `beforeInner` it
+ * recorded, through applyEdits — the same validated pipeline every other write
+ * goes through. This is the mechanism `undoRun` already uses for a named run;
+ * this is the same act on the failure path.
+ *
+ * TWO CASES FALL BACK to the whole-file restore, and both are honest:
+ *
+ *  - Records that are not plain inner swaps. A theme is page-level, an insert
+ *    has no "before", an attribute record holds open tags. Nothing to swap
+ *    back per block, so the blunt instrument is the only one available.
+ *  - A block whose current inner is no longer what this run wrote. Someone else
+ *    has been there since, and writing our `beforeInner` over their work would
+ *    be the very destruction this exists to prevent. The snapshot is no better
+ *    — but it is at least the behaviour that was there before, and the scar
+ *    says which blocks made it necessary.
+ */
+async function revertRunEdits({ root, page, htmlPath, runId, edits, where }) {
+  const records = Array.isArray(edits) ? edits : [];
+  if (records.length === 0) return null; // nothing was written; nothing to undo
+
+  const swappable = records.every((r) => r.op === undefined
+    && r.insertedAfter === undefined && r.insertedBefore === undefined
+    && typeof r.blockId === 'string' && typeof r.beforeInner === 'string');
+  if (!swappable) return restoreOrScar({ root, page, htmlPath, runId, where: `${where}/whole-file` });
+
+  let source;
+  try {
+    source = await fs.readFile(htmlPath, 'utf8');
+  } catch {
+    return restoreOrScar({ root, page, htmlPath, runId, where: `${where}/unreadable` });
+  }
+  const contended = records.filter((r) => {
+    const block = locateBlock(source, r.blockId);
+    return block === null || block.inner !== r.afterInner;
+  }).map((r) => r.blockId);
+  if (contended.length > 0) {
+    console.error(
+      `[redline] targeted revert of ${runId} on ${page} cannot use beforeInner for `
+      + `${contended.join(', ')} — falling back to the whole-file snapshot`);
+    return restoreOrScar({ root, page, htmlPath, runId, where: `${where}/contended` });
+  }
+
+  const applied = await applyEdits({
+    root, page, edits: records.map((r) => ({ blockId: r.blockId, newInner: r.beforeInner })),
+  });
+  if (applied.ok) return null;
+  console.error(
+    `[redline] TARGETED REVERT FAILED (${where}) for run ${runId} on ${page}: ${applied.error}`);
+  return { where, error: `targeted revert failed: ${applied.error}` };
 }
 
 // The full loop for one run: snapshot once, then for EACH sent comment
@@ -1338,7 +1406,10 @@ async function executeRun({ root, page, htmlPath, config, comments, batch, runId
     // fails is a scar on the run record, never a silent swallow (#58).
     let restoreScar = null;
     if (status === 'failed') {
-      restoreScar = await restoreOrScar({ root, page, htmlPath, runId, where: 'finish' });
+      // Targeted, not whole-file (#288): put back only the blocks this run
+      // wrote. `edits` carries each one's beforeInner, so the rollback is the
+      // exact inverse of the run rather than a rewind of the document.
+      restoreScar = await revertRunEdits({ root, page, htmlPath, runId, edits, where: 'finish' });
     }
     const run = batch
       ? { runId, commentIds: comments.map((c) => c.id), perComment, archetype, model, status, decisions, edits, createdAt: now() }
@@ -2146,9 +2217,11 @@ async function commitProposal({ root, page, htmlPath, runId, proposal, commentId
     theme: proposal.theme, inserts: proposal.inserts,
   });
   if (!applied.ok) {
-    // Nothing was written (applyEdits is all-or-nothing), but the doc is
-    // put back anyway — a partial write here would be a bug, not a state.
-    const scar = await restoreOrScar({ root, page, htmlPath, runId, where: 'propose-apply' });
+    // Nothing was written — applyEdits is all-or-nothing — so there is nothing
+    // to put back (#288). The old code restored anyway "in case", which on a
+    // whole-file snapshot means reverting every concurrent writer to defend
+    // against a partial write that cannot happen.
+    const scar = null;
     const body = { valid: false, code: applied.code, error: applied.error };
     if (applied.blockId) body.blockId = applied.blockId;
     if (scar !== null) { body.restoreFailed = true; body.restoreError = scar.error; }
@@ -2324,7 +2397,9 @@ async function commitDirectEdit({ root, page, htmlPath, runId, edits, actor, sco
   await saveSnapshot({ root, page, htmlPath, runId, kind: 'pre-run' });
   const applied = await applyEdits({ root, page, edits });
   if (!applied.ok) {
-    const scar = await restoreOrScar({ root, page, htmlPath, runId, where: 'direct-edit-apply' });
+    // All-or-nothing: nothing was written, so nothing needs putting back, and
+    // a whole-file restore would take a concurrent writer's work with it (#288).
+    const scar = null;
     const body = { error: applied.error, code: applied.code };
     if (applied.blockId) body.blockId = applied.blockId;
     if (scar !== null) { body.restoreFailed = true; body.restoreError = scar.error; }
