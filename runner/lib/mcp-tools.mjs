@@ -20,6 +20,7 @@
 // and could write a document but not make it commentable.
 
 import { connectToPage, closeSessions, ApiError } from './api-client.mjs';
+import { WatchSession, MODES } from './watch-session.mjs';
 
 const DEFAULT_AGENT_NAME = 'claude-code';
 
@@ -30,7 +31,13 @@ export class ParamError extends Error {}
 
 const sessions = new Map();
 
-export function closeAll() {
+export async function closeAll() {
+  // Release claims BEFORE the runners go: a claim released after its runner
+  // stops leaves the page showing a watcher that is not there until the TTL
+  // expires.
+  const held = [...watches.values()];
+  watches.clear();
+  await Promise.all(held.map((s) => s.stop().catch(() => {})));
   return closeSessions(sessions);
 }
 
@@ -267,6 +274,200 @@ async function setAiEdits(args, env) {
   return { page, runner: base, comment };
 }
 
+// ---- watching (#296, #297, #298) --------------------------------------------
+//
+// Four tools that replace five HTTP verbs, the listener subprocess, and every
+// piece of state the agent used to carry. The bookkeeping lives in
+// runner/lib/watch-session.mjs, which is awake for the whole MCP session; see
+// its header for what leaked upward before and why.
+
+const watches = new Map(); // `${base}|${page}` -> WatchSession
+
+const watchKey = (base, page) => `${base}|${page}`;
+
+/** The session this call is about. `file` is optional once watching: with
+ *  exactly one page under watch there is nothing to disambiguate, and making
+ *  the agent repeat the path on every wake is the kind of bookkeeping this
+ *  whole change exists to delete. */
+async function watchFor(args, env, { verb }) {
+  if (args.file === undefined && watches.size === 1) {
+    const [only] = watches.values();
+    return only;
+  }
+  const { base, page } = await open(args, env);
+  const found = watches.get(watchKey(base, page));
+  if (!found) {
+    throw new Error(watches.size === 0
+      ? `not watching anything — call redline_watch_start before ${verb}`
+      : `not watching ${page} — call redline_watch_start on it first`);
+  }
+  return found;
+}
+
+async function watchStart(args, env) {
+  const mode = requireString(args, 'mode');
+  if (!MODES.includes(mode)) {
+    throw new ParamError(`mode must be one of ${MODES.join(' | ')}`);
+  }
+  const { client, page, base } = await open(args, env);
+  const key = watchKey(base, page);
+  const already = watches.get(key);
+  if (already) {
+    // Idempotent rather than an error: a session that reconnects should not
+    // have to know whether it already claimed the page.
+    already.mode = mode;
+    return { page, runner: base, mode, resumed: true, ...(await already.baseline()) };
+  }
+  const session = new WatchSession({
+    client, base, page, mode, agentName: actorFor(args, env).agentName,
+  });
+  let baseline;
+  try {
+    baseline = await session.start({ ttlMs: Number(args.ttlMs) || undefined });
+  } catch (err) {
+    // A 409 names the holder and gives no sessionId. First holder wins, there
+    // is no eviction verb, and editing alongside another session is exactly
+    // what presence exists to prevent — so this surfaces rather than retries.
+    if (err instanceof ApiError && err.status === 409) {
+      // The 409 names the holder and withholds their sessionId — knowing who
+      // has the page is not the same as being able to act as them.
+      const held = err.body?.holder ?? {};
+      const who = held.agentName ? `${held.agentName} (pid ${held.pid ?? '?'})` : 'another session';
+      const detail = new Error(`${page} is already claimed by ${who} — say so and stop; its claim expires on its own`);
+      detail.status = 409;
+      detail.body = err.body;
+      throw detail;
+    }
+    throw err;
+  }
+  watches.set(key, session);
+  return { page, runner: base, resumed: false, ...baseline };
+}
+
+async function waitForChange(args, env) {
+  const session = await watchFor(args, env, { verb: 'waiting for a change' });
+  if (args.timeoutMs !== undefined && typeof args.timeoutMs !== 'number') {
+    throw new ParamError('timeoutMs must be a number');
+  }
+  const result = await session.waitForChange({ timeoutMs: args.timeoutMs });
+  return { runner: session.base, ...result };
+}
+
+async function watchStop(args, env) {
+  if (args.file === undefined && watches.size > 1) {
+    const all = await Promise.all([...watches.values()].map((s) => s.stop()));
+    const pages = [...watches.keys()];
+    watches.clear();
+    return { stopped: all.length, pages: pages.map((k) => k.split('|')[1]) };
+  }
+  const session = await watchFor(args, env, { verb: 'stopping' });
+  const result = await session.stop();
+  watches.delete(watchKey(session.base, session.page));
+  return { page: session.page, runner: session.base, stopped: 1, ...result };
+}
+
+/** Finish a comment in one call: lease → re-read → apply → release → reply →
+ *  status → re-anchor.
+ *
+ *  This is where the ordering rule dies. The lease goes around the READ and not
+ *  the write, because no write endpoint takes a sessionId and a held lease 409s
+ *  against its own holder. The agent never sees a lease id, never learns that
+ *  rule, and cannot leave a lease held across a long think — because it never
+ *  holds one across a turn boundary at all. */
+async function resolveComment(args, env) {
+  const commentId = requireString(args, 'commentId');
+  const replyBody = requireString(args, 'reply');
+  const status = requireString(args, 'status', { optional: true });
+  const edits = args.edits;
+  if (edits !== undefined && (!Array.isArray(edits) || edits.length === 0)) {
+    throw new ParamError('edits must be a non-empty array of {blockId, newInner}');
+  }
+  if (args.anchor !== undefined && (args.anchor === null || typeof args.anchor !== 'object' || Array.isArray(args.anchor))) {
+    throw new ParamError('anchor must be an object');
+  }
+  const session = await watchFor(args, env, { verb: 'resolving a comment' });
+  if (edits && !session.canEdit) {
+    // Mode is held by the server so an unauthorised write is REFUSED rather
+    // than left to the agent to remember it promised not to.
+    throw new ParamError(
+      'this page is being watched in reply-only mode — the document is never written to. '
+      + 'Omit `edits` to reply, or ask the author to restart the watch in reply-and-edit.');
+  }
+  const { client, page, base } = { client: session.client, page: session.page, base: session.base };
+  const actor = actorFor(args, env);
+  const out = { page, runner: base, commentId, applied: false };
+
+  if (edits) {
+    for (const e of edits) {
+      if (!e || typeof e.blockId !== 'string' || typeof e.newInner !== 'string') {
+        throw new ParamError('each edit must be {blockId: string, newInner: string}');
+      }
+    }
+    const blockIds = [...new Set(edits.map((e) => e.blockId))];
+    let lease = null;
+    try {
+      lease = await client.acquireLease({ page, blocks: blockIds, sessionId: session.sessionId, ttlMs: 30_000 });
+      // Re-read under the lease so the caller learns the block moved BEFORE the
+      // write lands on top of someone else's paragraph. /api/source carries no
+      // rev, so the sidecar revision comes from /api/status.
+      const [source, state] = await Promise.all([client.source(page), client.status(page)]);
+      out.blocksReadAtRev = state?.rev ?? null;
+      out.blocksRead = source.blocks
+        .filter((b) => blockIds.includes(b.id))
+        .map((b) => ({ id: b.id, tag: b.tag }));
+    } finally {
+      // Released before the write, always — including on the error path, or the
+      // next attempt collides with our own abandoned lease.
+      if (lease?.leaseId) {
+        await client.releaseLease(lease.leaseId, { sessionId: session.sessionId }).catch(() => {});
+      }
+    }
+    const result = await client.proposeEdits({
+      page,
+      commentId,
+      edits,
+      ...(args.scope !== undefined ? { scope: args.scope } : {}),
+      ...(status ? { decisions: [{ id: commentId, decision: status, summary: replyBody.slice(0, 200) }] } : {}),
+      dryRun: false,
+      ...actor,
+    });
+    // A pause is RETURNED, never swallowed: nothing was written and the blocks
+    // stay locked until someone answers with redline_confirm_scope.
+    if (result?.pendingConfirmation) {
+      return {
+        ...out,
+        pendingConfirmation: true,
+        runId: result.runId,
+        scope: result.scope,
+        note: 'the scope gate paused this write — nothing was applied and the blocks are locked. '
+          + 'Answer with redline_confirm_scope. Decline your own over-broad write unless the author '
+          + 'asked for a change this wide in words.',
+      };
+    }
+    out.applied = true;
+    out.runId = result?.runId ?? null;
+    out.edits = result?.edits ?? [];
+  }
+
+  const comment = await client.reply(commentId, { page, body: replyBody, ...actor });
+  out.replied = true;
+  // With edits the decision already carried the status; without them it has to
+  // be set on its own.
+  if (status && !edits) {
+    out.comment = await client.setStatus(commentId, { page, status, ...actor });
+  } else {
+    out.comment = comment;
+  }
+  if (args.anchor) {
+    out.comment = await client.setAnchor(commentId, { page, anchor: args.anchor });
+    out.reanchored = true;
+  }
+  // Last, so our own reply and status do not read back as new work.
+  const current = await session.advanceCursor(commentId);
+  if (current) out.comment = current;
+  return out;
+}
+
 // ---- schemas ----------------------------------------------------------------
 
 const FILE_PROP = {
@@ -287,6 +488,104 @@ const AGENT_PROP = {
 };
 
 export const TOOLS = [
+  {
+    name: 'redline_watch_start',
+    description: 'Attach this session to a document and become the watcher on it. Claims the page '
+      + '(one watcher at a time, first holder wins) and returns the baseline in the same call: every '
+      + 'comment already there, whether hold is on, and who else is present. Presence is then kept '
+      + 'alive by this server, not by your turns, so it does not go quiet while you think. '
+      + 'mode is the ONE question to ask the author first and never guess: "reply-only" means the '
+      + 'document is NEVER written to — every comment gets a threaded reply and nothing else; '
+      + '"reply-and-edit" means you write the edit, apply it, reply saying what changed, and set the '
+      + 'status. Most people want reply-and-edit. Everything already on the page is context you '
+      + 'LEAVE ALONE unless the author asks — say the count out loud and act only on what comes next. '
+      + 'Then call redline_wait_for_change.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...FILE_PROP,
+        mode: { type: 'string', description: 'reply-only | reply-and-edit. Ask the author; do not guess.' },
+        ttlMs: { type: 'number', description: 'Claim lifetime in ms (default 60000). Rarely needed.' },
+        ...AGENT_PROP,
+      },
+      required: ['file', 'mode'],
+    },
+  },
+  {
+    name: 'redline_wait_for_change',
+    description: 'BLOCK until the document changes, then return WHAT changed: comments new or '
+      + 'updated since you last acted on them, hold transitions, and any scope-gate pause waiting for '
+      + 'an answer. This is the watcher loop — call it, act on what comes back, call it again. '
+      + 'It does not poll: a comment landing two seconds in returns after two seconds. '
+      + 'A return of {changed:false} is a KEEP-ALIVE, not "nothing is coming" — the call simply hit '
+      + 'its time limit, so call it again to keep watching. Your own writes never wake you. '
+      + 'When hold is on the author is writing several comments that belong together: take no new '
+      + 'work until it clears. Comments with aiEdits:false are NOTES — read them for context, never '
+      + 'action them, never mark them addressed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...FILE_PROP,
+        timeoutMs: { type: 'number', description: 'How long to park, ms (default 50000, max 55000).' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'redline_resolve_comment',
+    description: 'Finish one comment in a single call: take the lease, re-read the block, apply your '
+      + 'edit, release, reply on the thread, set the status, and re-anchor if you rewrote the quoted '
+      + 'text. No model call, no cost — YOU write the prose. Omit `edits` to reply without touching '
+      + 'the document, which is the only thing this does in reply-only mode. '
+      + 'Build newInner from the full source (redline_read_source), never from the block index text — '
+      + 'that field is truncated plain text and an edit built from it silently strips markup. '
+      + 'Several comments on one block become ONE call with one edit: written separately, the second '
+      + 'is composed against text the first just changed. A question gets a reply and stays open — '
+      + 'the author decides when their question is answered. If the write reaches past the comment\'s '
+      + 'section or changes the page theme it comes back as {pendingConfirmation:true} with nothing '
+      + 'written; answer that with redline_confirm_scope.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...FILE_PROP,
+        commentId: { type: 'string', description: 'The comment you are finishing.' },
+        reply: { type: 'string', description: 'What you changed and why, in the author\'s language. Always required.' },
+        status: {
+          type: 'string',
+          description: 'addressed | declined | deferred. Omit to leave the comment open — correct for a '
+            + 'question you answered but did not resolve.',
+        },
+        edits: {
+          type: 'array',
+          description: 'Block replacements: {blockId, newInner}. Omit to reply only.',
+          items: {
+            type: 'object',
+            properties: { blockId: { type: 'string' }, newInner: { type: 'string' } },
+            required: ['blockId', 'newInner'],
+          },
+        },
+        anchor: {
+          type: 'object',
+          description: 'New anchor if your edit rewrote the quoted text: {quote, blockId?, prefix?, suffix?}. '
+            + 'You know what you changed, so picking the new quote is your job.',
+        },
+        scope: {
+          type: 'object',
+          description: 'Declare a deliberate wide change up front: {requiresConfirmation:false, summary}. '
+            + 'Only when the author asked for a change this wide in words.',
+        },
+        ...AGENT_PROP,
+      },
+      required: ['commentId', 'reply'],
+    },
+  },
+  {
+    name: 'redline_watch_stop',
+    description: 'Stop watching: releases the claim and every lease this session held, so the page '
+      + 'stops showing a watcher that has gone. Call it when the author says you are done. It also '
+      + 'runs automatically when this server exits.',
+    inputSchema: { type: 'object', properties: { ...FILE_PROP }, required: [] },
+  },
   {
     name: 'redline_list_comments',
     description: 'List every review comment on an HTML document: id, body, status, anchor, replies, '
@@ -601,6 +900,10 @@ const HANDLERS = {
   redline_reply: reply,
   redline_undo: undo,
   redline_set_ai_edits: setAiEdits,
+  redline_watch_start: watchStart,
+  redline_wait_for_change: waitForChange,
+  redline_resolve_comment: resolveComment,
+  redline_watch_stop: watchStop,
 };
 
 /** The browsable address of the page a result is about. Every handler already

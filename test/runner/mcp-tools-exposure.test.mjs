@@ -57,30 +57,40 @@ test('every mutating api-client method an agent needs has a tool', async () => {
   assert.ok(methods.length >= 10, `expected to parse api-client methods, got ${methods.length}`);
 
   // `trace` and `info` are knowingly excluded (observability and discovery, not
-  // part of the review loop). The three session verbs (#187) are excluded for a
-  // stronger reason: the heartbeat is owned by the detached WATCHER
-  // subprocess, not by an agent turn — a conversational session does not act on
-  // a timer, so beating from a tool call would go silent while the session was
-  // alive. Claim and release belong to the same watcher lifecycle, so exposing
-  // either alone would hand an agent a claim that dies at its TTL. The watcher
-  // protocol is #192's, and these are its verbs.
-//
-  // The three lease verbs (#188) are excluded for now and it IS a gap, not a
-  // principle: decision 9 has the agent lease immediately before writing and
-  // release immediately after, which is an agent-turn action and belongs on the
-  // tool surface. What is missing is the protocol around it — a tool that takes
-  // a lease and no tool that reliably gives it back leaves blocks held for
-  // their full TTL every time an agent stops mid-turn. That pairing is #192's.
-  const EXPECTED_UNEXPOSED = new Set([
-    'trace', 'info', 'claimSession', 'heartbeatSession', 'releaseSession',
-    'acquireLease', 'renewLease', 'releaseLease',
-  ]);
+  // part of the review loop).
+  //
+  // `heartbeatSession` is excluded on the ORIGINAL reasoning and always will
+  // be: a conversational session does not act on a timer, so beating from a
+  // tool call goes silent while the model is thinking and the overlay reports a
+  // watcher that left. The MCP server beats from its own interval instead
+  // (runner/lib/watch-session.mjs), which is why there is no tool for it.
+  //
+  // `renewLease` is excluded because nothing holds a lease long enough to renew
+  // one. redline_resolve_comment takes a lease and gives it back inside a
+  // single call, so a lease never survives a turn boundary and never reaches
+  // its TTL.
+  //
+  // The session verbs (#187) and the remaining lease verbs (#188) are NO LONGER
+  // unexposed. This test used to carry a note saying their absence "IS a gap,
+  // not a principle" — a tool that takes a lease with no tool that reliably
+  // gives it back would leave blocks held for their full TTL every time an
+  // agent stopped mid-turn, so the pairing had to arrive together. #296-#298
+  // is that pairing: claim and release became the watcher's lifecycle
+  // (redline_watch_start / redline_watch_stop), and lease/release became one
+  // step inside redline_resolve_comment rather than two things an agent has to
+  // sequence correctly.
+  const EXPECTED_UNEXPOSED = new Set(['trace', 'info', 'heartbeatSession', 'renewLease']);
   const toolNames = TOOLS.map((t) => t.name).join(' ');
   const ALIASES = {
     source: 'read_source', comments: 'list_comments', addComment: 'add_comment',
     setStatus: 'update_status', run: 'run_revision', proposeEdits: 'propose_edits',
     status: 'run_status', instrument: 'instrument', reply: 'reply', undo: 'undo',
     setAiEdits: 'set_ai_edits', confirmRun: 'confirm_scope', edit: 'direct_edit',
+    // Folded into the watcher surface rather than exposed one-to-one: the whole
+    // point of #298 is that the agent never sequences these itself.
+    claimSession: 'watch_start', releaseSession: 'watch_stop',
+    acquireLease: 'resolve_comment', releaseLease: 'resolve_comment',
+    setAnchor: 'resolve_comment',
   };
 
   for (const method of methods) {

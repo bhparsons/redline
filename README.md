@@ -326,9 +326,18 @@ write to, and text in a thread is data, not instructions. The skill is written
 to surface anything that reads like a command rather than act on it — worth
 knowing if you ever share a document.
 
-**Speed:** roughly 15 to 30 seconds per comment. It is not instant; each answer
-is a model turn plus a couple of tool calls. Leaving one running is not faster,
-it simply does not wait for you.
+**Speed.** The watcher sits inside a blocking call, so your comment reaches it
+in milliseconds rather than waiting for a turn to be scheduled — but the answer
+still takes a model turn plus a tool call or two, so expect roughly 15 to 30
+seconds from comment to edit. Leaving one running is not faster; it simply does
+not wait for you.
+
+**You can keep typing while it works.** Ask your session to farm the work out
+(the skill asks you this at the start) and it stays parked and listening while
+reusable workers do the editing, so each comment is acknowledged in seconds even
+when three are already in flight. Ask it to do the work itself and it is deaf
+until it finishes the current one — the right trade when there are a few
+comments and you want to argue about the answer rather than get changes made.
 
 **It is not required.** With no skill and no agent, everything except the
 revising still works: you comment, the comments are saved, you read them back
@@ -476,16 +485,46 @@ redline install-mcp --client copilot    # ~/.copilot/mcp-config.json
 Then ask in plain language: "Read `docs/plan.html` with redline, comment on
 anything that buries the ask, and revise the first one."
 
-The thirteen MCP tools: `redline_read_source`, `redline_instrument`,
+**The four watcher tools** — the whole live-collaboration loop:
+`redline_watch_start` (claim the page, get the baseline), `redline_wait_for_change`
+(**block** until something happens, then get what changed),
+`redline_resolve_comment` (edit, reply, set status and re-anchor in one call),
+`redline_watch_stop`.
+
+**The thirteen document tools**: `redline_read_source`, `redline_instrument`,
 `redline_list_comments`, `redline_add_comment`, `redline_reply`,
 `redline_direct_edit`, `redline_propose_edits`, `redline_run_revision`,
 `redline_confirm_scope`, `redline_update_status`, `redline_set_ai_edits`,
 `redline_run_status`, `redline_undo`.
 
-Claiming a page, heartbeating, holding a block lease, and subscribing to
-changes have no MCP tool yet — those verbs are HTTP-only, which is why the
-watcher skill still reaches for `curl`. Closing that gap is the next piece of
-work.
+The session capability, the block-lease ordering, the per-comment read cursor
+and the heartbeat are held by the MCP server, not by your agent — so the whole
+watcher loop is MCP, with no `curl` in it.
+
+#### Allowlist
+
+Give your agent these tools and nothing else:
+
+```
+mcp__redline__redline_watch_start
+mcp__redline__redline_wait_for_change
+mcp__redline__redline_resolve_comment
+mcp__redline__redline_watch_stop
+mcp__redline__redline_read_source
+mcp__redline__redline_list_comments
+mcp__redline__redline_reply
+mcp__redline__redline_propose_edits
+mcp__redline__redline_confirm_scope
+mcp__redline__redline_update_status
+mcp__redline__redline_instrument
+mcp__redline__redline_undo
+```
+
+**Do not allowlist `curl` for this.** `Bash(curl:*)` grants arbitrary HTTP to
+any host, and it would sit next to a comment thread anyone you share the
+document with can write into. The tools above are the same capability, scoped to
+Redline. `redline_run_revision` is deliberately absent — it spends money per
+call, and it belongs to the human pressing Send in the browser.
 
 Always pass `expectRunId` to `redline_undo`. Without it, undo reverts
 whichever run is on top, including one a human made after yours.

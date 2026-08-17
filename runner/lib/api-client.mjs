@@ -75,6 +75,12 @@ export function createClient(base) {
       request('POST', `/api/comment/${encodeURIComponent(commentId)}/status`, { payload }),
     setAiEdits: (commentId, payload) =>
       request('POST', `/api/comment/${encodeURIComponent(commentId)}/ai-edits`, { payload }),
+    // Re-anchor a comment whose quoted text an edit rewrote (#157). The endpoint
+    // has existed since the anchor model landed; without a wrapper the one
+    // surface that KNOWS the quote moved — the session that just rewrote it —
+    // had to hand-roll HTTP to say so.
+    setAnchor: (commentId, payload) =>
+      request('POST', `/api/comment/${encodeURIComponent(commentId)}/anchor`, { payload }),
     run: (payload) => request('POST', '/api/run', { payload }),
     // Presence (#187). The watcher subprocess owns the heartbeat, not an agent
     // turn — a conversational session does not act on a timer, so beating from
