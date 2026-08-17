@@ -30,6 +30,56 @@ import { discoverRunner } from '../runner/lib/discovery.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
+// How long a runner has to fall over on its bind before we call it started.
+// It either fails immediately or it is listening; there is no slow EADDRINUSE.
+const BIND_GRACE_MS = 1_500;
+const PORT_RACE_RETRIES = 3;
+
+/**
+ * Spawn the runner, surviving a lost port race.
+ *
+ * choosePort() only observes that a port was FREE A MOMENT AGO; runner/index.mjs
+ * binds it later and deliberately does not walk. So between the probe and the
+ * bind, anything else starting a runner — another project, a test, an agent —
+ * can take it, and the command died with a raw EADDRINUSE on a port the user
+ * never chose. That is not a conflict worth failing on: nobody asked for that
+ * port, so losing it is a reason to pick another one, not to stop.
+ *
+ * An EXPLICIT --port is different and is left alone. You asked for that port,
+ * so being moved off it silently would be worse than the error.
+ *
+ * stderr is piped so the race can be recognised, and re-emitted so nothing the
+ * runner says is swallowed.
+ */
+async function startRunner(makeArgs, { pinned = false } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    const portArgs = [];
+    if (!pinned) {
+      const { port, scannable, note } = attempt < PORT_RACE_RETRIES
+        ? await choosePort()
+        // Every retry lost too. Port 0 has no race at all — the OS assigns it
+        // under the bind — so it is the one option that cannot fail this way.
+        : { port: 0, scannable: false, note: 'the preferred ports keep being taken; starting on any free port' };
+      if (!scannable) console.warn(`redline: ${note}`);
+      portArgs.push('--port', String(port));
+    }
+
+    const child = spawn(process.execPath, makeArgs(portArgs), { stdio: ['inherit', 'inherit', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => { stderr += chunk; process.stderr.write(chunk); });
+
+    const early = await new Promise((resolve) => {
+      const onExit = (code, signal) => { clearTimeout(timer); resolve({ code, signal }); };
+      const timer = setTimeout(() => { child.off('exit', onExit); resolve(null); }, BIND_GRACE_MS);
+      child.once('exit', onExit);
+    });
+    if (early === null) return child;                       // past the bind: it is up
+
+    const lostTheRace = !pinned && /EADDRINUSE/.test(stderr);
+    if (!lostTheRace) process.exit(early.signal ? 1 : (early.code ?? 1));
+  }
+}
+
 /**
  * Serve a document's directory and open the page (#46).
  *
@@ -57,23 +107,9 @@ async function openDocument(docPath, { noOpen = false, extraArgs = [] } = {}) {
     return EXIT.ok;
   }
 
-  // Pick a port, preferring the window the extension's fallback scan knows.
-  // runner/index.mjs does not walk, so without this the command dies with a raw
-  // EADDRINUSE whenever anything already holds 5175 — the normal state on a
-  // machine that has run redline once today. A full window is NOT fatal: the
-  // extension uses the origin that served the page, so any port serves
-  // documents fine, and only the popup and file:// pages lose auto-discovery.
-  const portArgs = [];
-  if (!extraArgs.includes('--port')) {
-    const { port, scannable, note } = await choosePort();
-    if (!scannable) console.warn(`redline: ${note}`);
-    portArgs.push('--port', String(port));
-  }
-
-  const child = spawn(
-    process.execPath,
-    [path.join(ROOT, 'runner', 'index.mjs'), plan.root, ...portArgs, ...extraArgs],
-    { stdio: 'inherit' },
+  const child = await startRunner(
+    (portArgs) => [path.join(ROOT, 'runner', 'index.mjs'), plan.root, ...portArgs, ...extraArgs],
+    { pinned: extraArgs.includes('--port') },
   );
   let exited = false;
   child.on('exit', (code, signal) => { exited = true; process.exit(signal ? 1 : (code ?? 1)); });
@@ -239,15 +275,20 @@ const args = (cmd === 'serve' && !hasPositional(rest)) ? ['.', ...rest] : rest;
 // Pick a free port for `serve` the same way `redline <file>` does. Without
 // this, `serve` binds 5175 and dies with a raw EADDRINUSE the moment a second
 // project is open — which is the documented flow (one runner per repo you
-// review), so it was failing on its most ordinary use. An explicit --port or
-// REDLINE_PORT still pins, and a pinned port that is busy is still an error:
-// you asked for that port, so being moved off it silently would be worse.
-if (cmd === 'serve' && !rest.includes('--port') && !process.env.REDLINE_PORT
-    && !(await configPinsPort(args[0]))) {
-  const { port, scannable, note } = await choosePort();
-  if (!scannable) console.warn(`redline: ${note}`);
-  args.push('--port', String(port));
-}
+// review), so it was failing on its most ordinary use. Three things still PIN a
+// port — an explicit --port, REDLINE_PORT, and a runnerPort in the served
+// directory's config — and a pinned port that is busy is still an error: you
+// asked for that port, so being moved off it silently would be worse.
+const pinned = cmd !== 'serve'
+  || rest.includes('--port')
+  || Boolean(process.env.REDLINE_PORT)
+  || await configPinsPort(args[0]);
 
-const child = spawn(process.execPath, [path.join(ROOT, target.script), ...args], { stdio: 'inherit' });
-child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
+if (cmd === 'serve') {
+  // startRunner retries past a lost race; it cannot happen on the pinned path.
+  const child = await startRunner((portArgs) => [path.join(ROOT, target.script), ...args, ...portArgs], { pinned });
+  child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
+} else {
+  const child = spawn(process.execPath, [path.join(ROOT, target.script), ...args], { stdio: 'inherit' });
+  child.on('exit', (code, signal) => process.exit(signal ? 1 : (code ?? 1)));
+}

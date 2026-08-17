@@ -196,3 +196,39 @@ test('a --port value is never mistaken for the demo directory', async (t) => {
   const info = await fetch('http://127.0.0.1:5399/api/info').then((r) => r.json());
   assert.equal(await fs.realpath(info.root), await fs.realpath(dir));
 });
+
+test('two runners started at once both come up — a lost port race is not fatal', async (t) => {
+  // choosePort() only observes that a port was FREE A MOMENT AGO; the runner
+  // binds it later and deliberately does not walk. Two starts that race for the
+  // same "free" port used to leave one dead with a raw EADDRINUSE on a port
+  // nobody asked for. Nobody chose it, so losing it is a reason to pick another,
+  // not to stop. (Blake hit this on 5176 before the retry existed.)
+  const a = await fs.mkdtemp(path.join(os.tmpdir(), 'rl-raceA-'));
+  const b = await fs.mkdtemp(path.join(os.tmpdir(), 'rl-raceB-'));
+  t.after(async () => {
+    await fs.rm(a, { recursive: true, force: true });
+    await fs.rm(b, { recursive: true, force: true });
+  });
+
+  const one = serveDetached(a);
+  const two = serveDetached(b);
+  t.after(() => { one.stop(); two.stop(); });
+
+  const [outA, outB] = await Promise.all([
+    one.until(/serving/, 25_000),
+    two.until(/serving/, 25_000),
+  ]);
+
+  // Read the port from the SUCCESS line only. A runner that lost the race and
+  // retried also printed "EADDRINUSE ... 127.0.0.1:5179" first, and matching
+  // that reports the port it failed on rather than the one it is serving.
+  const portA = outA.match(/http:\/\/127\.0\.0\.1:(\d+)/)?.[1];
+  const portB = outB.match(/http:\/\/127\.0\.0\.1:(\d+)/)?.[1];
+  assert.ok(portA && portB, `both must report a port; got ${portA} / ${portB}`);
+  assert.notEqual(portA, portB);
+
+  for (const [port, dir] of [[portA, a], [portB, b]]) {
+    const info = await fetch(`http://127.0.0.1:${port}/api/info`).then((r) => r.json());
+    assert.equal(await fs.realpath(info.root), await fs.realpath(dir));
+  }
+});
