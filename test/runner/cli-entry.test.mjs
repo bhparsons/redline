@@ -111,8 +111,8 @@ function blockPort(port) {
 // `redline serve` spawns runner/index.mjs, so killing the CLI leaves the
 // runner holding the pipe. Start it in its own process group and kill the
 // group.
-function serveDetached(dir) {
-  const child = spawn(process.execPath, [BIN, 'serve', dir],
+function serveDetached(dir, args = ['serve', dir]) {
+  const child = spawn(process.execPath, [BIN, ...args],
     { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let out = '';
   const collect = (chunk) => { out += chunk; };
@@ -161,4 +161,38 @@ test('serve still honours an explicit --port, busy or not', async () => {
     blocker.stop();
     await fs.rm(dir, { recursive: true, force: true });
   }
+});
+
+test('`redline demo <dir>` serves the directory it just seeded', async (t) => {
+  // It seeded the file and then printed runner/index.mjs's usage line, because
+  // the directory argument was consumed by the seeder AND forwarded to the
+  // runner as a second positional. The seed message made that read as success
+  // (Blake, 2026-08-17, on a fresh clone following the README).
+  const dir = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'rl-demo-')), 'seeded-here');
+  const server = serveDetached(dir, ['demo', dir, '--no-open']);
+  t.after(() => server.stop());
+
+  const out = await server.until(/http:\/\/127\.0\.0\.1:\d+\//, 20_000);
+  assert.match(out, /seeded /);
+  assert.doesNotMatch(out, /usage: node runner\/index\.mjs/,
+    'the seeded directory must not also be forwarded to the runner');
+
+  // Serving, and serving the right root — not the cwd it was launched from.
+  const port = out.match(/127\.0\.0\.1:(\d+)/)[1];
+  const info = await fetch(`http://127.0.0.1:${port}/api/info`).then((r) => r.json());
+  assert.equal(await fs.realpath(info.root), await fs.realpath(dir));
+});
+
+test('a --port value is never mistaken for the demo directory', async (t) => {
+  // `redline demo --port 3000 ~/dir` used to seed into a directory called
+  // "3000", because the positional scan did not skip the flag's own value.
+  const dir = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'rl-demoport-')), 'real-target');
+  const server = serveDetached(dir, ['demo', '--port', '5399', dir, '--no-open']);
+  t.after(() => server.stop());
+
+  const out = await server.until(/http:\/\/127\.0\.0\.1:5399\//, 20_000);
+  assert.match(out, /real-target/, 'seeded into the directory, not into "5399"');
+
+  const info = await fetch('http://127.0.0.1:5399/api/info').then((r) => r.json());
+  assert.equal(await fs.realpath(info.root), await fs.realpath(dir));
 });

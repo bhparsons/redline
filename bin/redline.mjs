@@ -177,9 +177,16 @@ if (cmd === 'demo' || await looksLikeDoc(cmd)) {
   const noOpen = rest.includes('--no-open');
   const passThrough = rest.filter((a) => a !== '--no-open');
   let docPath = cmd;
+  // The directory `demo` seeds into is CONSUMED here. Forwarding it as well
+  // handed runner/index.mjs a second positional and it answered with its usage
+  // line, so `redline demo ~/somewhere` seeded the file and then refused to
+  // serve it — the seed message made it look like it had worked. The old filter
+  // compared against docPath, which by then was the seeded FILE, so the
+  // directory never matched and always leaked through.
+  let consumed = null;
   if (cmd === 'demo') {
-    const dirArg = passThrough.find((a) => !a.startsWith('--'));
-    const seeded = await seedDemo({ repoRoot: ROOT, ...(dirArg ? { dir: dirArg } : {}) });
+    consumed = firstPositional(passThrough);
+    const seeded = await seedDemo({ repoRoot: ROOT, ...(consumed ? { dir: consumed } : {}) });
     console.log(seeded.seeded
       ? `seeded ${path.relative(process.cwd(), seeded.absFile) || seeded.name}`
       : `reusing the demo already at ${path.relative(process.cwd(), seeded.absFile) || seeded.name}`);
@@ -187,7 +194,7 @@ if (cmd === 'demo' || await looksLikeDoc(cmd)) {
   }
   process.exit(await openDocument(docPath, {
     noOpen,
-    extraArgs: passThrough.filter((a) => a.startsWith('--') || a !== docPath),
+    extraArgs: passThrough.filter((a) => a !== consumed && a !== docPath),
   }));
 }
 
@@ -213,12 +220,19 @@ async function configPinsPort(dir) {
   }
 }
 
-function hasPositional(argv) {
+/** The first real argument, skipping flags AND the value that follows --port.
+ *  Without the skip, `redline demo --port 3000 ~/dir` seeds into a directory
+ *  called "3000". Hoisted, so the demo branch above can use it. */
+function firstPositional(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port') { i++; continue; }
-    if (!argv[i].startsWith('--')) return true;
+    if (!argv[i].startsWith('--')) return argv[i];
   }
-  return false;
+  return null;
+}
+
+function hasPositional(argv) {
+  return firstPositional(argv) !== null;
 }
 const args = (cmd === 'serve' && !hasPositional(rest)) ? ['.', ...rest] : rest;
 
