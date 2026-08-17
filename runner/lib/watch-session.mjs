@@ -41,6 +41,27 @@ function isActionable(comment) {
   return comment.status === 'open' && comment.aiEdits !== false;
 }
 
+/** The cursor entry for a comment: where we last left it.
+ *
+ *  `rev` alone is not enough. A worker running in its own process writes under
+ *  OUR claim, and that write never passes through this object — so the rev
+ *  advances behind our back and the write reads as the author's. Recording the
+ *  reply count too means the replies added since we looked can be named exactly
+ *  (`replies` is append-only), and each one's author asked. */
+function mark(comment) {
+  return {
+    rev: comment.rev ?? 0,
+    replyCount: Array.isArray(comment.replies) ? comment.replies.length : 0,
+    status: comment.status,
+  };
+}
+
+/** Was this written by an agent? While we hold the page's exclusive claim, any
+ *  agent-authored reply is OURS — ours directly, or a worker's under our claim.
+ *  Deliberately keyed on `creator` and NOT on agentName: a worker may name
+ *  itself whatever it likes and is still writing as this watcher. */
+const byAgent = (entry) => entry?.creator === 'agent';
+
 /** Runs paused on the scope gate. /api/status has no top-level list for them:
  *  a paused run is a `runs[]` entry that carries `pendingAt`, which the ledger
  *  attaches only in the awaiting state (runner/lib/leases.mjs statusFor). Keyed
@@ -132,7 +153,7 @@ export class WatchSession {
       this.client.comments(this.page, { sessionId: this.sessionId }),
       this.client.status(this.page),
     ]);
-    for (const c of comments) this.cursor.set(c.id, c.rev ?? 0);
+    for (const c of comments) this.cursor.set(c.id, mark(c));
     this.lastHold = status?.hold?.on === true;
     this.lastRev = status?.rev ?? 0;
     return {
@@ -150,6 +171,29 @@ export class WatchSession {
     };
   }
 
+  /** Is this comment carrying work we have not seen?
+   *
+   *  Never just `rev > seen.rev`. Our own writes bump the rev, and so do our
+   *  workers' — including workers whose writes never passed through this object.
+   *  What actually matters is whether a HUMAN has touched it since we looked:
+   *
+   *    - a comment we have never seen is fresh unless an agent wrote it;
+   *    - a status change is fresh (we record our own, so a difference is theirs);
+   *    - replies are append-only, so the ones added since our mark are exactly
+   *      `replies.slice(seen.replyCount)` — fresh if ANY of them is not an
+   *      agent's. That last word matters: a human reply followed by a worker's
+   *      reply is still a human reply, and an "is the newest one ours" test
+   *      would swallow it.
+   */
+  isFresh(c) {
+    const seen = this.cursor.get(c.id);
+    if (seen === undefined) return !byAgent(c);
+    if ((c.rev ?? 0) <= seen.rev) return false;
+    if (c.status !== seen.status) return true;
+    const replies = Array.isArray(c.replies) ? c.replies : [];
+    return replies.slice(seen.replyCount).some((r) => !byAgent(r));
+  }
+
   /** What has changed since this session last acted, or null when nothing has.
    *  Returning null is the ECHO FILTER: our own writes bump the page rev and
    *  would otherwise wake us for work we just did, but they also advance the
@@ -159,10 +203,7 @@ export class WatchSession {
       this.client.comments(this.page, { sessionId: this.sessionId }),
       this.client.status(this.page),
     ]);
-    const fresh = comments.filter((c) => {
-      const seen = this.cursor.get(c.id);
-      return seen === undefined || (c.rev ?? 0) > seen;
-    });
+    const fresh = comments.filter((c) => this.isFresh(c));
     const hold = status?.hold ?? { on: false };
     const holdOn = hold.on === true;
     const holdChanged = holdOn !== this.lastHold;
@@ -171,6 +212,16 @@ export class WatchSession {
 
     if (fresh.length === 0 && !holdChanged && pending.length === 0) return null;
     this.lastHold = holdOn;
+    // Mark what we are about to HAND OVER as seen. Without this a comment the
+    // orchestrator delegates rather than finishing on the spot comes back on
+    // every subsequent wake, which is the same instant-return spin the echo
+    // filter was built to stop — just wearing a different hat.
+    //
+    // Showing is not finishing, so nothing is dropped on the strength of it:
+    // `outstanding` below reports every actionable comment this session has
+    // seen and not resolved, on EVERY delta. New work is edge-triggered so the
+    // loop can rest; unfinished work is level-triggered so it cannot be lost.
+    for (const c of fresh) this.cursor.set(c.id, mark(c));
 
     return {
       changed: true,
@@ -187,6 +238,9 @@ export class WatchSession {
       // hold on there is no actionable work at all until it clears.
       actionable: holdOn ? [] : fresh.filter(isActionable).map((c) => c.id),
       notes: fresh.filter((c) => c.aiEdits === false).map((c) => c.id),
+      // Everything still asking for work, whether or not it is new this wake.
+      // An orchestrator that crashed mid-delegation reconciles from here.
+      outstanding: comments.filter(isActionable).map((c) => c.id),
     };
   }
 
@@ -247,7 +301,7 @@ export class WatchSession {
    *  returned in 0 ms every time instead of parking. Found in a live session
    *  (2026-08-17). */
   noteWrite(comment) {
-    if (comment && typeof comment.id === 'string') this.cursor.set(comment.id, comment.rev ?? 0);
+    if (comment && typeof comment.id === 'string') this.cursor.set(comment.id, mark(comment));
     return comment;
   }
 
@@ -256,7 +310,7 @@ export class WatchSession {
   async advanceCursor(commentId) {
     const { comments } = await this.client.comments(this.page, { sessionId: this.sessionId });
     const found = comments.find((c) => c.id === commentId);
-    if (found) this.cursor.set(commentId, found.rev ?? 0);
+    if (found) this.cursor.set(commentId, mark(found));
     return found ?? null;
   }
 
@@ -277,4 +331,4 @@ export class WatchSession {
   }
 }
 
-export const _internals = { isActionable, readEventStream, DEFAULT_WAIT_MS, MAX_WAIT_MS, HEARTBEAT_MS };
+export const _internals = { isActionable, byAgent, mark, readEventStream, DEFAULT_WAIT_MS, MAX_WAIT_MS, HEARTBEAT_MS };

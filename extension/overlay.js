@@ -2075,11 +2075,25 @@
       const hold = holdState();
       const heldRelease = Boolean(hold && hold.on);
       if (heldRelease) await setHold(false); // releases the batch too
+      // R-004: Send was reported as "produced no run", and it is SUPPOSED to
+      // produce no run — it is a nudge, not a paid lane. What it produced
+      // instead was invisible, so a deaf watcher and a broken button looked
+      // identical from the outside. Log what actually happened, per comment,
+      // so the next such report arrives with its own evidence.
+      const touched = [];
+      const missed = [];
       for (const id of commentIds) {
         try {
           await api(`/api/comment/${encodeURIComponent(id)}/status`, { page, status: 'open' });
-        } catch { /* a failed touch leaves the comment exactly as it was */ }
+          touched.push(id);
+        } catch (err) {
+          // A failed touch leaves the comment exactly as it was.
+          missed.push({ id, error: String(err && err.message ? err.message : err) });
+        }
       }
+      console.log('[redline] Send: nudged %d comment(s) — no run is created by design (#212/#254). '
+        + 'If nothing happens next, the watcher is not reading, not the button.',
+      touched.length, { touched, missed, heldRelease, watcher: presenceState() });
       runUi = { phase: 'done', outcome: { kind: 'handover', count: commentIds.length, heldRelease } };
       renderStrip();
       await refresh();
@@ -2163,7 +2177,7 @@
       button.disabled = true;
       let res = null;
       try {
-        res = await apiRaw('/api/undo', { page });
+        res = await apiRaw('/api/undo', { page, creator: 'human' });
       } catch { /* handled below */ }
       if (res && res.status === 200) {
         reloadPreserving({ kind: 'undo' });
@@ -4367,7 +4381,7 @@
           // 'conflicted' (or an unsupported shape) means the marker reply
           // stands and the watcher re-derives the block instead.
           if (rejectArm && rejectRunId) {
-            await apiRaw('/api/undo', { page, runId: rejectRunId }).catch(() => {});
+            await apiRaw('/api/undo', { page, runId: rejectRunId, creator: 'human' }).catch(() => {});
           }
           await refresh();
         } catch { btn.disabled = false; }
@@ -4716,6 +4730,13 @@
       try {
         res = await apiRaw('/api/edit', {
           page, blockId, newInner,
+          // R-005: say who did this. The runner treats a missing actor as
+          // human — which is what every M1 sidecar carries, so it keeps
+          // working — but that made a human edit identifiable only by the
+          // ABSENCE of a field, next to agent runs that name themselves. A
+          // review history you can only read by noticing what is not there is
+          // not a review history.
+          creator: 'human',
           ...(held !== null ? { leaseId: held.leaseId } : {}),
         });
       } catch {

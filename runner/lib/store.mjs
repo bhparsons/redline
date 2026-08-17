@@ -214,6 +214,18 @@ export function applyOps(data, ops) {
       case 'setStatus': {
         const c = comment(op.commentId);
         if (!c) { missing.push(op); break; }
+        // R-007 (Blake's call, 2026-08-17): reopening DROPS the resolution.
+        // A reopened comment kept pointing at the run that had addressed it, so
+        // the record said "open" and "resolved by run X" at once, and the reader
+        // had to know which one to believe. A resolution is the claim that this
+        // comment is finished; reopening is the author withdrawing that claim,
+        // so the claim goes with it. Undo already dropped it on the same
+        // reasoning — this makes the two agree.
+        //
+        // The run itself is untouched and still lists the comment in its
+        // decisions, so what was tried is still readable from the run log. The
+        // history is not lost; it just stops being asserted on the comment.
+        if (op.status === 'open') delete c.resolution;
         c.status = op.status;
         if (op.by !== undefined && op.by !== null) c.statusUpdatedBy = op.by;
         else delete c.statusUpdatedBy;

@@ -323,3 +323,113 @@ test('every comment-mutating tool advances the cursor, not just resolve_comment'
   assert.equal(woke.changed, true);
   assert.equal(woke.comments[0].id, c.id);
 });
+
+test('a worker writing outside this process does not wake its own orchestrator', async (t) => {
+  // R-003's suggested fix, and the half my first cut missed: "advance the cursor
+  // on any write made by the claiming session REGARDLESS OF agentName, since a
+  // worker writing under the watcher's claim is still the watcher's write."
+  // A worker in its own process never passes through the WatchSession object, so
+  // a cursor advanced only on our own tool calls cannot see it — the rev moves
+  // behind our back and the worker's reply reads as the author's.
+  const f = await fixture();
+  t.after(() => f.close());
+
+  await f.call('redline_watch_start', { mode: 'reply-and-edit' });
+  const c = await f.comment('needs a rewrite');
+  await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+
+  // Straight over HTTP, under a different agent name — a separate worker process.
+  await f.post(`/api/comment/${encodeURIComponent(c.id)}/reply`, {
+    page: 'doc.html', body: 'worker here, rewrote the second clause',
+    creator: 'agent', agentName: 'style-worker',
+  });
+
+  const quiet = await f.call('redline_wait_for_change', { timeoutMs: 1_500 });
+  assert.equal(quiet.changed, false, "a worker's write under our claim is our write");
+});
+
+test('a human reply BEHIND a worker reply is still surfaced', async (t) => {
+  // The trap in the obvious version of the fix above: testing only whether the
+  // NEWEST reply is an agent's swallows a human reply that a worker then replied
+  // after. Replies are append-only, so every reply since the mark gets asked.
+  const f = await fixture();
+  t.after(() => f.close());
+
+  await f.call('redline_watch_start', { mode: 'reply-and-edit' });
+  const c = await f.comment('needs a rewrite');
+  await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+  await f.call('redline_reply', { commentId: c.id, body: 'on it' });
+
+  // Author speaks, then a worker posts after them.
+  await f.post(`/api/comment/${encodeURIComponent(c.id)}/reply`, {
+    page: 'doc.html', body: 'actually make it shorter too',
+  });
+  await f.post(`/api/comment/${encodeURIComponent(c.id)}/reply`, {
+    page: 'doc.html', body: 'worker: done', creator: 'agent', agentName: 'style-worker',
+  });
+
+  const woke = await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+  assert.equal(woke.changed, true, 'the human reply must not be swallowed by the worker reply after it');
+  assert.equal(woke.comments[0].id, c.id);
+});
+
+test('the loop does not spin: N comments cost a bounded number of waits', async (t) => {
+  // The standing guard for "the watcher went slow". Every way this has broken —
+  // the echo filter, the cursor, a wedged connection — shows up the same way: a
+  // wait that returns instantly with nothing to do, burning a turn per iteration
+  // while the page looks attended. Whatever the cause, this fails.
+  const f = await fixture();
+  t.after(() => f.close());
+
+  await f.call('redline_watch_start', { mode: 'reply-and-edit' });
+
+  let waits = 0;
+  const wait = async (ms) => { waits++; return f.call('redline_wait_for_change', { timeoutMs: ms }); };
+
+  for (let i = 0; i < 3; i++) {
+    const c = await f.comment(`comment ${i}`, { quote: 'alpha bravo charlie' });
+    const change = await wait(20_000);
+    assert.equal(change.changed, true, `comment ${i} must wake the loop`);
+    assert.ok(change.actionable.includes(c.id), `comment ${i} must be actionable`);
+    // The orchestrator shape: acknowledge, then finish.
+    await f.call('redline_reply', { commentId: c.id, body: `Got it — handling ${i}.` });
+    await f.call('redline_resolve_comment', {
+      commentId: c.id,
+      edits: [{ blockId: 'r-0001', newInner: `alpha bravo charlie (pass ${i})` }],
+      reply: `Done ${i}.`,
+      status: 'addressed',
+    });
+  }
+
+  // One quiet park at the end proves it settles rather than spinning.
+  const settled = await wait(1_500);
+  assert.equal(settled.changed, false);
+
+  assert.ok(waits <= 5, `3 comments should cost about 4 waits, not ${waits} — the loop is spinning`);
+});
+
+test('a delegated comment is reported as outstanding without waking the loop again', async (t) => {
+  // Showing is not finishing. A comment handed to a worker must stop counting as
+  // NEW (or the loop spins) while still being visible as UNFINISHED (or work is
+  // silently dropped, which is the other half of R-003).
+  const f = await fixture();
+  t.after(() => f.close());
+
+  await f.call('redline_watch_start', { mode: 'reply-and-edit' });
+  const c = await f.comment('hand this to a worker');
+  const first = await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+  assert.deepEqual(first.actionable, [c.id]);
+  assert.deepEqual(first.outstanding, [c.id]);
+
+  // Delegated, not finished. The next park must be quiet.
+  const quiet = await f.call('redline_wait_for_change', { timeoutMs: 1_500 });
+  assert.equal(quiet.changed, false, 'a comment already shown is not new again');
+
+  // But it is still visible as unfinished on the next real wake.
+  await f.comment('a second, unrelated ask', { quote: 'second paragraph' });
+  const second = await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+  assert.equal(second.changed, true);
+  assert.equal(second.actionable.length, 1, 'only the new one is new');
+  assert.equal(second.outstanding.length, 2, 'both are still outstanding');
+  assert.ok(second.outstanding.includes(c.id), 'the delegated comment is not lost');
+});

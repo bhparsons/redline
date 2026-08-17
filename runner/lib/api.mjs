@@ -294,6 +294,59 @@ async function createComment(root, req, res) {
   sendJson(res, 201, comment);
 }
 
+/**
+ * Which comments quote text the document no longer contains (R-006)?
+ *
+ * Compared against the block the anchor NAMES, not the whole document: a quote
+ * that still exists somewhere else is still orphaned from the paragraph the
+ * author was talking about, and saying otherwise would be worse than saying
+ * nothing. A comment with no quote, or naming a block that is gone, is not
+ * reported here — a missing block is a different fault and inventing a flag for
+ * it would blur the one this answers.
+ *
+ * Whitespace is normalised on both sides because the source is wrapped and the
+ * quote came from a rendered selection; entities are decoded for the same
+ * reason. Anything else compares a paragraph against how it happens to be typed.
+ *
+ * Never throws: a document that cannot be read means we do not know, and "we do
+ * not know" must not read as "everything is fine" OR take the whole endpoint
+ * down with it — so it reports nothing orphaned and the comments still come back.
+ */
+function decodeText(t) {
+  // Only the five surgery.mjs encodes on the way in — this compares text, it is
+  // not a parser, and a general entity decoder here would be a second, weaker
+  // implementation of one that already exists.
+  return t
+    .replaceAll('&lt;', '<').replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"').replaceAll('&#39;', "'")
+    .replaceAll('&amp;', '&');
+}
+
+async function orphanedAnchors(htmlPath, comments) {
+  const flagged = new Set();
+  const quoted = comments.filter((c) => typeof c?.anchor?.quote === 'string' && c.anchor.quote.trim() !== '');
+  if (quoted.length === 0) return flagged;
+  let source;
+  try {
+    source = await fs.readFile(htmlPath, 'utf8');
+  } catch {
+    return flagged;
+  }
+  // blockText() is the same tag-strip-and-collapse the rest of this file uses
+  // to turn a block's inner HTML into plain text; Infinity because a quote can
+  // sit anywhere in a paragraph, not just its first 120 characters.
+  const norm = (t) => decodeText(String(t)).replace(/\s+/g, ' ').trim();
+  const byId = new Map(stampedBlocks(source).map((b) => [b.id, norm(blockText(b.inner, Infinity))]));
+  for (const c of quoted) {
+    const blockId = c.anchor.blockId;
+    if (typeof blockId !== 'string') continue;
+    const text = byId.get(blockId);
+    if (text === undefined) continue;          // block gone: a different fault
+    if (!text.includes(norm(c.anchor.quote))) flagged.add(c.id);
+  }
+  return flagged;
+}
+
 async function listComments(root, url, res) {
   const page = url.searchParams.get('page');
   if (!page) {
@@ -324,9 +377,17 @@ async function listComments(root, url, res) {
   // see which comments are held without a second round-trip to /api/status.
   // Each currently-held comment is also flagged with `held: true`.
   const heldIds = new Set(holdView(data).heldCommentIds);
-  const comments = data.comments.map((c) =>
-    heldIds.has(c.id) ? { ...c, held: true } : c
-  );
+  // R-006: an anchor whose quoted text an edit rewrote points at nothing, and
+  // nothing said so. The highlight lands in the wrong place, status changes are
+  // accepted without complaint, and the only way to notice was to read the
+  // document yourself. redline_resolve_comment already takes an `anchor` to fix
+  // one — there was just no detection when a caller forgot.
+  const orphaned = await orphanedAnchors(htmlPath, data.comments);
+  const comments = data.comments.map((c) => (
+    heldIds.has(c.id) || orphaned.has(c.id)
+      ? { ...c, ...(heldIds.has(c.id) ? { held: true } : {}), ...(orphaned.has(c.id) ? { orphaned: true } : {}) }
+      : c
+  ));
   sendJson(res, 200, { comments, runs: data.runs ?? [], hold: holdView(data) });
 }
 
