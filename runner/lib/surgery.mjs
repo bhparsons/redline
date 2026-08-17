@@ -169,9 +169,17 @@ export function locateBlock(source, blockId) {
 /** The double-quoted data-rev ids in a fragment, in source order. */
 export function revIds(html) {
   const ids = [];
-  const re = /data-rev\s*=\s*"([^"]*)"/g;
+  // F5 (#291): double quotes are what instrument.mjs emits, and for a long time
+  // they were the only form this matched. Nothing in this codebase writes any
+  // other, which made it a latent trap rather than a live bug — the first
+  // hand-edited or externally-generated document using single quotes would have
+  // had its blocks read as having NO ids at all, so sameRevMarks() would have
+  // compared [] against [] and waved through an edit that dropped every mark.
+  // A reject-only guard that cannot see the thing it guards against is not a
+  // guard. All three attribute forms now count.
+  const re = /data-rev\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"'`=]+))/gi;
   let m;
-  while ((m = re.exec(html))) ids.push(m[1]);
+  while ((m = re.exec(html))) ids.push(m[1] ?? m[2] ?? m[3]);
   return ids;
 }
 

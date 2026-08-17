@@ -53,13 +53,25 @@ export const STAMP_TAGS = new Set([
 
 /** Mint a fresh r-XXXX id (4 hex chars) not present in `taken`; adds it. */
 export function mintId(taken) {
-  for (;;) {
+  // F6 (#291): this used to be `for (;;)`. The id space is 16 bits — 65,536
+  // ids — so a document with tens of thousands of blocks makes collisions the
+  // common case rather than the rare one, and an exhausted space made the whole
+  // runner hang inside a write with no error and no log. A hang is the worst
+  // available failure: it looks like slowness, so it gets waited on.
+  //
+  // The cap is generous enough that hitting it means the space really is
+  // crowded (or crypto is broken), not that we were unlucky: at 90% full, 200
+  // draws miss every time with probability 0.9^200, about 7e-10.
+  for (let attempt = 0; attempt < 200; attempt++) {
     const id = 'r-' + crypto.randomBytes(2).toString('hex');
     if (!taken.has(id)) {
       taken.add(id);
       return id;
     }
   }
+  throw new Error(
+    `could not mint a fresh data-rev id after 200 attempts (${taken.size} ids in use). `
+    + 'The 16-bit id space is close to exhausted for this document — split it, or widen the id format.');
 }
 
 // Find the index of the matching close tag for an open tag ending at openEnd.

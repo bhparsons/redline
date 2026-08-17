@@ -45,7 +45,34 @@ export async function resolvePage(root, page) {
   } catch {
     return null;
   }
-  return abs;
+  // F7 (#291): resolve symlinks and re-check containment.
+  //
+  // The traversal guard above works on the path as WRITTEN, so a symlink inside
+  // the served root pointing anywhere on the filesystem passed it. The review
+  // established that the write is safe anyway — save() writes a temp file and
+  // renames over the target, which REPLACES the symlink instead of following it
+  // — but that is safe by accident: it depends on how writing happens to be
+  // implemented, and the next person to write a file directly inherits a hole
+  // they never knew was being covered for them. It also does not protect READS,
+  // which do follow the link.
+  //
+  // A symlink that stays inside the root is fine and keeps working; only one
+  // that escapes is refused.
+  // The resolved path is used for the CHECK ONLY; the path as written is what
+  // comes back. Returning the resolved one looked equivalent and was not: on
+  // macOS /var is itself a symlink to /private/var, so every page under a temp
+  // root came back re-rooted, and presence — which keys sessions by page path —
+  // started reporting holders as "../../../../private/var/...". A guard that
+  // changes the identity of the thing it guards is a new bug, not a fix.
+  let real;
+  let realRoot;
+  try {
+    [real, realRoot] = await Promise.all([fs.realpath(abs), fs.realpath(root)]);
+  } catch {
+    return abs; // nothing to follow, or unreadable — the stat above already passed
+  }
+  const inside = real === realRoot || real.startsWith(realRoot + path.sep);
+  return inside ? abs : null;
 }
 
 export function sidecarPath(htmlPath) {
