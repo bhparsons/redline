@@ -433,3 +433,63 @@ test('a delegated comment is reported as outstanding without waking the loop aga
   assert.equal(second.outstanding.length, 2, 'both are still outstanding');
   assert.ok(second.outstanding.includes(c.id), 'the delegated comment is not lost');
 });
+
+test('Send now wakes a watcher that has already seen the comment', async (t) => {
+  // Send is a NUDGE: it touches each comment's status open -> open, which bumps
+  // the comment's rev, which is the signal a watcher keys on. It is the author's
+  // clearest instruction — "this one, now" — and it is the ONLY signal that
+  // carries no new text with it.
+  //
+  // An earlier echo filter required a status CHANGE or a non-agent reply before
+  // calling something fresh, which made a bare rev bump invisible. So the nudge
+  // did nothing at all for the case it exists for: a comment the watcher had
+  // already been shown and had not finished. Found by Blake asking what the
+  // nudge actually does.
+  const f = await fixture();
+  t.after(() => f.close());
+
+  await f.call('redline_watch_start', { mode: 'reply-and-edit' });
+  const c = await f.comment('tighten this');
+  const first = await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+  assert.deepEqual(first.actionable, [c.id]);
+
+  // Shown, not finished. The next park is quiet — that part is correct.
+  const quiet = await f.call('redline_wait_for_change', { timeoutMs: 1_200 });
+  assert.equal(quiet.changed, false);
+
+  // Now the author presses Send on it.
+  await f.post(`/api/comment/${encodeURIComponent(c.id)}/status`, { page: 'doc.html', status: 'open' });
+
+  const nudged = await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+  assert.equal(nudged.changed, true, 'the nudge must reach the watcher');
+  assert.ok(nudged.actionable.includes(c.id), 'and the comment is actionable again');
+});
+
+test('a re-anchor by someone else still wakes; our own write still does not', async (t) => {
+  // Both are bare rev bumps with no new reply and no status change — the shape
+  // that used to be swallowed. They must be told apart by WHO, not by shape.
+  const f = await fixture();
+  t.after(() => f.close());
+
+  await f.call('redline_watch_start', { mode: 'reply-and-edit' });
+  const c = await f.comment('this quote will move');
+  await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+
+  // Ours: resolve_comment re-anchors internally and must not wake us.
+  await f.call('redline_resolve_comment', {
+    commentId: c.id,
+    edits: [{ blockId: 'r-0001', newInner: 'alpha bravo, rewritten' }],
+    reply: 'Done.',
+    status: 'addressed',
+    anchor: { quote: 'alpha bravo, rewritten', blockId: 'r-0001' },
+  });
+  const afterOurs = await f.call('redline_wait_for_change', { timeoutMs: 1_200 });
+  assert.equal(afterOurs.changed, false, 'our own re-anchor is not news to us');
+
+  // Theirs: the same shape, from outside.
+  await f.post(`/api/comment/${encodeURIComponent(c.id)}/anchor`, {
+    page: 'doc.html', anchor: { quote: 'second paragraph', blockId: 'r-0002' },
+  });
+  const afterTheirs = await f.call('redline_wait_for_change', { timeoutMs: 20_000 });
+  assert.equal(afterTheirs.changed, true, 'someone else moving the anchor is news');
+});

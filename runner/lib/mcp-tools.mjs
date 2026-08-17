@@ -331,6 +331,9 @@ async function watchStart(args, env) {
   if (!MODES.includes(mode)) {
     throw new ParamError(`mode must be one of ${MODES.join(' | ')}`);
   }
+  if (args.acknowledge !== undefined && typeof args.acknowledge !== 'boolean') {
+    throw new ParamError('acknowledge must be true or false');
+  }
   const { client, page, base } = await open(args, env);
   const key = watchKey(base, page);
   const already = watches.get(key);
@@ -342,6 +345,7 @@ async function watchStart(args, env) {
   }
   const session = new WatchSession({
     client, base, page, mode, agentName: actorFor(args, env).agentName,
+    acknowledge: args.acknowledge,
   });
   let baseline;
   try {
@@ -527,6 +531,15 @@ export const TOOLS = [
       properties: {
         ...FILE_PROP,
         mode: { type: 'string', description: 'reply-only | reply-and-edit. Ask the author; do not guess.' },
+        acknowledge: {
+          type: 'boolean',
+          description: 'Post a one-line "got it" on each comment BEFORE doing the work. '
+            + 'Default false. Set it true when you are farming work out to workers, because then the '
+            + 'acknowledgement is the only thing between the author and silence while a worker takes '
+            + 'minutes. Leave it false when you do the work in this session — the answer arrives in the '
+            + 'same turn, so a "got it" is a permanent line that says nothing the next line does not. '
+            + 'REPLIES CANNOT BE DELETED: every one is in the thread forever.',
+        },
         ttlMs: { type: 'number', description: 'Claim lifetime in ms (default 60000). Rarely needed.' },
         ...AGENT_PROP,
       },

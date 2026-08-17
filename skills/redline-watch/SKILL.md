@@ -240,10 +240,26 @@ You never read the document yourself. That is what keeps you cheap and, more
 importantly, keeps you parked — a comment arriving while you are working is a
 comment you do not see.
 
-**Acknowledge first, always.** A one-line reply on the comment, immediately,
-before any work starts: *"Got it — tightening the opening paragraph."* It is the
-only thing standing between a comment and silence, and it is what makes the
-watcher feel attached rather than absent.
+**Acknowledge first — when the work is farmed out.** A one-line reply on the
+comment, immediately, before any work starts: *"Got it — tightening the opening
+paragraph."* While a worker takes minutes, that line is the only thing between
+the author and silence.
+
+**Working in this session, do NOT acknowledge separately.** Your answer arrives
+in the same turn, so "got it" followed a moment later by "done, here is what
+changed" is two permanent lines where one would do. Pass
+`acknowledge: true` to `redline_watch_start` only in the farmed-out case; it
+defaults to false.
+
+**ONE REPLY PER COMMENT, not one per step.** `redline_resolve_comment` applies
+the edit, sets the status AND re-anchors in a single call — none of which needs
+its own announcement. A comment that came back with "got it", then "done", then
+"re-pointed the anchor" is three lines describing one action.
+
+**Replies cannot be deleted.** Nothing in the API removes one, deliberately: a
+review thread you can quietly edit afterwards is not a record. So every line you
+post is one the author reads forever, and on a document reviewed over weeks the
+watcher's chatter becomes most of the thread. Say the thing once.
 
 ### Reuse workers; never spawn one per comment
 

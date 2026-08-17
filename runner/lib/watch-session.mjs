@@ -107,12 +107,27 @@ async function readEventStream({ base, page, signal, onRev }) {
 }
 
 export class WatchSession {
-  constructor({ client, base, page, mode, agentName }) {
+  constructor({ client, base, page, mode, agentName, acknowledge }) {
     this.client = client;
     this.base = base;
     this.page = page;
     this.mode = mode;
     this.agentName = agentName;
+    // Whether to post "got it" before doing the work.
+    //
+    // It is not free, and the cost is permanent: THERE IS NO WAY TO DELETE A
+    // REPLY. Nothing in the API removes one, deliberately — a review thread you
+    // can quietly edit afterwards is not a record. So every acknowledgement is
+    // a line the author will read forever, and on a document reviewed over
+    // weeks that is most of the thread.
+    //
+    // The default is therefore the mode, not a fixed answer. Farmed out, the
+    // acknowledgement is the ONLY thing between a comment and silence while a
+    // worker takes minutes — it earns its permanence. Working in-session, the
+    // answer arrives in the same turn, so "got it" is a line that says nothing
+    // the next line does not say better. (Blake, 2026-08-17, on seeing three
+    // replies where one would have done.)
+    this.acknowledge = typeof acknowledge === 'boolean' ? acknowledge : false;
     this.sessionId = null;       // the capability — never returned to the agent
     this.cursor = new Map();     // commentId -> the rev we last acted at
     this.lastHold = false;
@@ -159,6 +174,7 @@ export class WatchSession {
     return {
       page: this.page,
       mode: this.mode,
+      acknowledge: this.acknowledge,
       comments,
       existingCount: comments.length,
       actionableCount: comments.filter(isActionable).length,
@@ -189,9 +205,26 @@ export class WatchSession {
     const seen = this.cursor.get(c.id);
     if (seen === undefined) return !byAgent(c);
     if ((c.rev ?? 0) <= seen.rev) return false;
-    if (c.status !== seen.status) return true;
+
+    // The rev moved and we did not move it — our own writes advance the cursor,
+    // so anything still ahead of it came from somewhere else. Default to FRESH.
+    //
+    // The one exception is the out-of-process worker: it writes under our claim
+    // without passing through this object, so its replies look like the
+    // author's. Recognise that narrowly — only when the change is ENTIRELY new
+    // agent replies and nothing else moved.
+    //
+    // Getting this backwards is what broke Send now. An earlier version
+    // required a status CHANGE or a non-agent reply, which meant a bare rev
+    // bump was silently ignored — and Send's nudge is exactly that: it touches
+    // a comment's status open → open. So the author's clearest possible signal
+    // ("act on this one, now") was the one thing the watcher could not hear.
     const replies = Array.isArray(c.replies) ? c.replies : [];
-    return replies.slice(seen.replyCount).some((r) => !byAgent(r));
+    const added = replies.slice(seen.replyCount);
+    const onlyOurWorkersSpoke = added.length > 0
+      && added.every(byAgent)
+      && c.status === seen.status;
+    return !onlyOurWorkersSpoke;
   }
 
   /** What has changed since this session last acted, or null when nothing has.

@@ -214,9 +214,15 @@ test('two runners started at once both come up — a lost port race is not fatal
   const two = serveDetached(b);
   t.after(() => { one.stop(); two.stop(); });
 
+  // Wait for the URL LINE, not for "serving". The runner prints two lines —
+  // "redline runner serving <root>" and then the URL — so waiting on the first
+  // and reading the second raced its own flush: one side came back with the
+  // port and the other with undefined, on a runner that was perfectly healthy.
+  // Wait for the thing you are about to read.
+  const URL_LINE = /http:\/\/127\.0\.0\.1:\d+\//;
   const [outA, outB] = await Promise.all([
-    one.until(/serving/, 25_000),
-    two.until(/serving/, 25_000),
+    one.until(URL_LINE, 25_000),
+    two.until(URL_LINE, 25_000),
   ]);
 
   // Read the port from the SUCCESS line only. A runner that lost the race and
