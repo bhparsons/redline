@@ -50,11 +50,28 @@ test('a document path is a command; a mistyped word is still an error', async ()
   assert.equal(await looksLikeDoc(dir), false, 'a directory is not a document');
 });
 
-test('a file that is not html is not a document, even if it exists', async () => {
+test('an unsupported extension is not a document, even if the file exists', async () => {
+  // This used to use .md as its example. #52 made Markdown a reviewable source
+  // — it is converted to HTML and THAT is what gets reviewed — so the example
+  // moved rather than the rule: a file redline cannot render is still not a
+  // document, and a bare word is still a subcommand.
   const dir = await tmp('ext');
-  const f = path.join(dir, 'notes.md');
-  await fs.writeFile(f, '# x');
-  assert.equal(await looksLikeDoc(f), false);
+  for (const name of ['notes.txt', 'data.json', 'script.mjs', 'README']) {
+    const f = path.join(dir, name);
+    await fs.writeFile(f, 'x');
+    assert.equal(await looksLikeDoc(f), false, `${name} is not a reviewable document`);
+  }
+});
+
+test('a Markdown file IS a document — it is converted, then reviewed (#52)', async () => {
+  const dir = await tmp('md-doc');
+  for (const name of ['plan.md', 'plan.markdown', 'PLAN.MD']) {
+    const f = path.join(dir, name);
+    await fs.writeFile(f, '# x');
+    assert.equal(await looksLikeDoc(f), true, `${name} is a reviewable source`);
+  }
+  assert.equal(await looksLikeDoc(path.join(dir, 'missing.md')), false,
+    'a path that is not a file is still not a document');
 });
 
 test('the browser command is the platform default, and failing to open is not fatal', () => {

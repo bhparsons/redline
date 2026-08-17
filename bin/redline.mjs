@@ -25,6 +25,7 @@ import { runCli, isAgentCommand, USAGE as AGENT_USAGE, EXIT } from '../runner/li
 import { installMcp, InstallError, USAGE as INSTALL_USAGE } from '../runner/lib/install-mcp.mjs';
 import {
   looksLikeDoc, seedDemo, planOpen, pageUrl, openInBrowser, choosePort,
+  isMarkdown, convertMarkdown,
 } from '../runner/lib/open-doc.mjs';
 import { discoverRunner } from '../runner/lib/discovery.mjs';
 
@@ -213,6 +214,25 @@ if (cmd === 'demo' || await looksLikeDoc(cmd)) {
   const noOpen = rest.includes('--no-open');
   const passThrough = rest.filter((a) => a !== '--no-open');
   let docPath = cmd;
+  // A Markdown source is converted to the HTML beside it and THAT is what gets
+  // reviewed (#52) — one-way by decision, and the .md is never written. The
+  // block ids are derived from content, so re-running this after editing the
+  // source keeps every id on every paragraph you did not touch, and keeps their
+  // comments with them.
+  if (isMarkdown(docPath)) {
+    const converted = await convertMarkdown(path.resolve(docPath));
+    if (converted.error) {
+      console.error(`redline: ${converted.error}`);
+      process.exit(EXIT.usage);
+    }
+    const rel = path.relative(process.cwd(), converted.out) || converted.out;
+    console.log(converted.reconverted
+      ? (converted.changed
+        ? `re-converted ${docPath} → ${rel} (ids kept for unchanged blocks)`
+        : `${rel} is already current`)
+      : `converted ${docPath} → ${rel}`);
+    docPath = converted.out;
+  }
   // The directory `demo` seeds into is CONSUMED here. Forwarding it as well
   // handed runner/index.mjs a second positional and it answered with its usage
   // line, so `redline demo ~/somewhere` seeded the file and then refused to

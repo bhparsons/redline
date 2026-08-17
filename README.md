@@ -89,6 +89,27 @@ repo root, and the session will not find it.
 no agent session attached. `redline serve .` is the one to use with a watcher.
 Add `--no-open` to either to print the URL instead of launching a browser.
 
+### Reviewing a Markdown file
+
+Point Redline at a `.md` and it converts it to HTML beside the source, then
+reviews that:
+
+```sh
+redline docs/plan.md
+```
+
+`docs/plan.html` is now the reviewed document. **The `.md` is never written** —
+this is one-way on purpose, because guessing which Markdown spelling an author
+meant is how a tool rewrites a file nobody asked it to touch. Carry decisions
+back yourself.
+
+Re-run it after editing the source and the block ids are **derived from the
+content**, so every paragraph you did not touch keeps its id and keeps its
+comments. Only what you actually changed loses its anchor.
+
+It refuses to overwrite an HTML file it did not generate, so a hand-written
+`plan.html` next to a `plan.md` is safe.
+
 ### What Redline writes into that repo
 
 Pointing Redline at a document changes things on disk. All of it is local, none

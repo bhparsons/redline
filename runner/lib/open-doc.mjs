@@ -103,9 +103,46 @@ export const EXIT = { ok: 0, usage: 1, runner: 2 };
  */
 export async function looksLikeDoc(arg) {
   if (typeof arg !== 'string' || !arg || arg.startsWith('-')) return false;
-  if (!/\.(html?|HTML?)$/.test(arg)) return false;
+  // .md joins .html here (#52): a Markdown file is a document you want to
+  // review, it just needs converting first. Still narrow — an existing FILE
+  // with one of these extensions, so a bare unknown word keeps erroring as an
+  // unknown command instead of being swallowed into "I'll try to open that".
+  if (!/\.(html?|md|markdown)$/i.test(arg)) return false;
   const stat = await fs.stat(path.resolve(arg)).catch(() => null);
   return Boolean(stat?.isFile());
+}
+
+/** Is this a Markdown source rather than an HTML document? */
+export function isMarkdown(file) {
+  return /\.(md|markdown)$/i.test(file);
+}
+
+/**
+ * Convert a Markdown file to the reviewable HTML beside it, and return that
+ * path (#52). Re-conversion is the normal case — the ids are content-derived,
+ * so a paragraph nobody touched keeps its id and keeps its comments.
+ *
+ * REFUSES to overwrite an HTML file it did not generate. The converted document
+ * is named after its source, so `plan.md` claims `plan.html`; if something is
+ * already there without our marker it is somebody's hand-written page, and
+ * silently replacing it would destroy work to save a rename. The source .md is
+ * never written, on any path.
+ */
+export async function convertMarkdown(absMdPath) {
+  const { convert, sourceOf } = await import('./markdown.mjs');
+  const out = absMdPath.replace(/\.(md|markdown)$/i, '.html');
+  const existing = await fs.readFile(out, 'utf8').catch(() => null);
+  if (existing !== null && sourceOf(existing) === null) {
+    return {
+      error: `${path.basename(out)} already exists and was not generated from `
+        + `${path.basename(absMdPath)} — move it aside, or rename the Markdown file`,
+    };
+  }
+  const md = await fs.readFile(absMdPath, 'utf8');
+  const html = convert(md, { sourceName: path.basename(absMdPath) });
+  const changed = existing !== html;
+  if (changed) await fs.writeFile(out, html);
+  return { out, changed, reconverted: existing !== null };
 }
 
 /** The argv that opens a URL in the platform's default browser. */
