@@ -428,6 +428,12 @@ Known limits worth reading before you file a bug:
 - **Undo is linear** and backed by `.history/` snapshots, not git. Reverting a
   run that a later run built on top of is refused rather than guessed at.
 
+## What is in this repo
+
+[`docs/SHIPPED-CODE-MAP.md`](docs/SHIPPED-CODE-MAP.md) — what each directory is,
+how the three pieces fit, and where to start reading. Generated from the
+publisher's own file list, so it cannot describe something that is not here.
+
 ## Something went wrong?
 
 Open an issue on this repo. Four things make a report actionable, and three of
