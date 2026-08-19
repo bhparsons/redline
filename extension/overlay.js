@@ -73,6 +73,23 @@
   const BUFFER_MAX = 50; // refuse past this rather than silently dropping the oldest
   const DOWN_TICK_MS = 1000; // how often the "retrying Ns" readout advances
 
+  // ---- the page-level Undo is HIDDEN (#311) ---------------------------------
+  // The control works; what it cannot do is say WHICH run it will revert. It is
+  // last-run-wins, and under a live watcher the last run changes underneath you:
+  // read the page, decide "undo that", and by the click the watcher has landed
+  // another run on a different comment. You would revert that one instead, with
+  // nothing on screen naming it.
+  //
+  // The runner already has the honest verbs — POST /api/undo takes `runId` for a
+  // targeted revert of a NAMED run (#232, refuses with reason:'conflicted' when
+  // later edits touched those blocks) and `expectRunId` to refuse when the top
+  // of the stack is not the run you meant (#164). The overlay button sends
+  // NEITHER. So this is a UI gap, not an engine one, and the fix is a per-comment
+  // affordance on the card that actioned it — not a better page-level button.
+  //
+  // Flip to true to bring the old control back verbatim; nothing else changes.
+  const UNDO_UI_ENABLED = false;
+
   // ---- the human's block lease (#189) ---------------------------------------
   //
   // Until this existed the human side of the lease ledger was empty: opening
@@ -577,6 +594,7 @@
     undoBtn.type = 'button';
     undoBtn.title = 'Undo the last run';
     undoBtn.addEventListener('click', () => undoLastRun(undoBtn));
+    if (!UNDO_UI_ENABLED) undoWrap.classList.add('rv-undo-off');
     undoWrap.appendChild(undoBtn);
     // #214: the reason rides on the wrap as data, and the capsule itself is
     // built on approach into #rv-root. The sub is dropped: "only the runner
@@ -3466,8 +3484,9 @@
         rowChip.title = chip.title;
       }
       renderAudienceState();
-      const canUndo = Boolean(statusInfo && statusInfo.lastRun
-        && (statusInfo.lastRun.status === 'ok' || statusInfo.lastRun.status === 'partial'))
+      const canUndo = UNDO_UI_ENABLED
+        && Boolean(statusInfo && statusInfo.lastRun
+          && (statusInfo.lastRun.status === 'ok' || statusInfo.lastRun.status === 'partial'))
         && !isRunning();
       undoWrap.classList.toggle('rv-hidden', !canUndo);
       undoWrap.classList.toggle('rv-explaining', runnerDown);

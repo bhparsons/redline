@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Redline Review",
-  "version": "0.4.76",
-  "version_name": "0.4.76 \u00b7 redline-rebuild",
+  "version": "0.4.77",
+  "version_name": "0.4.77 · redline-rebuild",
   "description": "Review overlay for local HTML documents, backed by the redline runner.",
   "content_scripts": [
     {

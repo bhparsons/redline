@@ -656,6 +656,10 @@ html.rv-panel-open #rv-root .rv-gutter { right: 336px; }
 #rv-root .rv-empty { padding: 24px 16px; color: var(--rv-ink-soft); }
 
 #rv-root .rv-hidden { display: none; }
+/* #311: the page-level Undo is hidden while per-comment undo is designed.
+   Belt and braces — the JS also refuses to unhide it — so no later toggle of
+   .rv-hidden can bring back a control that cannot name what it reverts. */
+#rv-root .rv-undo-off { display: none !important; }
 
 /* ============================================================
    Uninstrumented-page notice — "Prepare page" (flat translucent fill,
